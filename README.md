@@ -131,14 +131,26 @@ that is where the compiler lives, and it is four commands to get there.
 > **Docker has to be installed and running on your PC first.** Palette *is* a set of
 > Docker containers, so `sima-cli sdk` has nothing to start without it. Get
 > [Docker Desktop](https://docs.docker.com/get-started/get-docker/) on Windows or macOS,
-> or Docker Engine on Linux, then check it before going further:
+> or Docker Engine on Linux.
+>
+> **On Windows, install WSL2 first.** Docker Desktop runs its containers on the WSL2
+> backend, so it will not start without one, and `sima-cli` belongs in that Linux side
+> too. In PowerShell as Administrator:
+>
+> ```powershell
+> wsl --install -d Ubuntu
+> wsl -l -v                  # want: Ubuntu, Running, 2
+> ```
+>
+> Then turn on **Settings > Resources > WSL integration** for that distribution in Docker
+> Desktop, and check the whole path from inside Ubuntu:
 >
 > ```bash
-> docker run hello-world      # must print "Hello from Docker!"
+> docker run hello-world     # must print "Hello from Docker!"
 > ```
 >
 > None of this is needed to *run* models, only to compile one. Everything above works
-> with no Docker at all.
+> with no Docker and no WSL at all.
 
 ```bash
 # On your PC, once: mount the folder holding best.pt into the SDK containers

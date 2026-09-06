@@ -32,6 +32,7 @@ PLACEHOLDERS = ("<", ">", "...", "$EDITOR", "EMAIL", "PATH", "NAME", "DIR", "|")
 #: still appear somewhere, so a section being rewritten does not leave a stale
 #: exemption behind.
 FOREIGN_FLAGS = {
+    "--install": "wsl --install -d Ubuntu",
     "--workspace": "sima-cli sdk setup --workspace",
 }
 
