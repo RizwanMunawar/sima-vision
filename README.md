@@ -18,47 +18,58 @@
 
 </div>
 
-**Computer visionm applications on SiMa.ai Modalix DevKit 3.0.** Object detection, instance
-segmentation fall detection and many more: one pipeline, no setup step.
+**Computer vision applications on the SiMa.ai Modalix DevKit 3.0.** Object detection,
+instance segmentation, fall detection and more: one pipeline, no setup step.
 
-Needs a [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10 or later. Everything below runs **on the board** unless it says otherwise.
+Needs a [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and
+Python 3.10 or later.
 
-## Quickstart
+## 📑 Contents
 
-### 1 &middot; Install the SiMa.ai Neat Core
+| | |
+|:--|:--|
+| [🚀 Quickstart](#-quickstart) | Two commands on the board, nothing to download by hand |
+| [🎬 Your own footage](#-your-own-footage) | Point it at an `.mp4` or a raw `.h264` |
+| [🧠 Your own model](#-your-own-model) | Convert a trained `.pt` into a DevKit pack |
+| [🔁 Moving files](#-moving-files-between-the-board-and-your-pc) | `push` and `pull` between PC and DevKit |
+| [🚩 Flags worth knowing](#-flags-worth-knowing) | The seven you will actually reach for |
+| [🌱 Environment](#-environment) | Variables that change where things go |
+| [🤝 Contributing](#-contributing) | Clone, install, test |
+
+## 🚀 Quickstart
+
+Everything in this section runs **on the DevKit**. No Docker, no WSL, no login.
+
+### 1. Install the SiMa.ai Neat Core
 
 ```bash
 sima-cli login
 sima-cli neat install core@v0.3.0
 ```
 
-### 2 &middot; Install sima-vision
+### 2. Install sima-vision and run it
 
 ```bash
 pip install sima-vision
-```
-
-### 3 &middot; Run it
-
-**Nothing to download first.** Each app fetches its own pretrained YOLO26 pack and a demo
-clip into `./assets` on its first run, then runs. Every run after that reuses them.
-
-| App | Fetched for you | Writes |
-|:--|:--|:--|
-| `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (20 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
-| `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (23 MB) + the same clip | `segmentation.mp4`, `frames/` |
-| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
-
-Packs and clips come from one public GitHub release, so no login is involved and
-`sima-cli` is not needed to get them. Each download is checked against its published
-SHA-256 and discarded if it does not match. Each app fetches only what it needs.
-
-```bash
 sima-vision detect
 ```
 
+That is it. **Two commands, and the second one is the work.**
+
+> [!TIP]
+> **Nothing to download by hand.** Each app fetches its own pretrained YOLO26 pack and a
+> demo clip into `./assets` on its first run, then runs. Every run after that reuses
+> them. Packs and clips come from one public GitHub release, so no login is involved and
+> `sima-cli` is not needed to get them.
+
+| App | Fetched for you | Writes |
+|:--|:--|:--|
+| `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
+| `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4`, `frames/` |
+| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
+
 <details>
-<summary><b>Instance segmentation</b> &nbsp;&middot;&nbsp; per-pixel masks, with an optional blur</summary>
+<summary>🎨 <b>Instance segmentation</b> &nbsp; per-pixel masks, with an optional blur</summary>
 
 ```bash
 sima-vision segment
@@ -69,138 +80,20 @@ sima-vision segment --blur --keep-classes person
 </details>
 
 <details>
-<summary><b>Fall detection</b> &nbsp;&middot;&nbsp; tracks people, with optional email alerts</summary>
+<summary>🚨 <b>Fall detection</b> &nbsp; tracks people, with optional email alerts</summary>
 
 ```bash
 sima-vision fall
 sima-vision fall --alert-to ops@example.com
 ```
 
-Nothing is emailed until you pass `--send`; without it a fall is composed and logged so
+Nothing is emailed until you pass `--send`. Without it a fall is composed and logged, so
 you can see what would have gone out.
 
 </details>
 
-> [!TIP]
-> **That is the whole setup.** No setup command, no config file, nothing to download by
-> hand. A run finds the Neat runtime, puts the board's numpy and OpenCV on the path,
-> fetches whatever is missing, and says what it is doing at every stage.
->
-> Everything below is optional. Take what you need.
+## 🎬 Your own footage
 
-## Moving files between the board and your PC
-
-Output lands beside the run, on the board. Name the board once and neither command needs
-`--host`:
-
-```bash
-$env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"
-```
-
-```bash
-sima-vision pull                   # DevKit -> host, whatever the run left
-sima-vision pull --into results/   # ...into a directory of your choosing
-sima-vision push my-clip.h264      # host -> DevKit
-```
-
-### Your own model
-
-Train a YOLO26 detector, then convert it **inside the Palette Model SDK container** --
-that is where the compiler lives, and it is four commands to get there.
-
-Everything here happens in WSL, not in PowerShell: Palette is a set of Docker
-containers, Docker Desktop runs them on the WSL2 backend, and `sima-cli` drives both from
-the Linux side.
-
-**1. WSL2 and Docker.** In PowerShell as Administrator:
-
-```powershell
-wsl --install -d Ubuntu
-wsl -l -v                  # want: Ubuntu, Running, 2
-```
-
-Install [Docker Desktop](https://docs.docker.com/get-started/get-docker/), then turn on
-**Settings > Resources > WSL integration** for Ubuntu.
-
-**2. Go into Ubuntu.** Everything from here down is typed in that shell, not in
-PowerShell. From PowerShell:
-
-```powershell
-wsl -d Ubuntu
-```
-
-The prompt changes to something like `you@machine:~$`. That is where the rest of this
-happens; `exit` comes back to PowerShell.
-
-```bash
-docker run hello-world     # must print "Hello from Docker!"
-```
-
-**3. sima-cli.** It needs a virtualenv -- Ubuntu refuses a bare `pip install` with
-`externally-managed-environment`:
-
-```bash
-sudo apt update && sudo apt install -y python3-venv python3-pip
-python3 -m venv ~/sima
-source ~/sima/bin/activate     # note: `source`, in Ubuntu. There is no
-                               # PowerShell equivalent -- ~/sima is a Linux venv
-pip install sima-cli
-sima-cli login                 # needs a community.sima.ai account
-```
-
-The `source` line is the one to remember: a new Ubuntu shell starts outside the venv, and
-`sima-cli` is only on the path once it has been run. `(sima)` at the front of the prompt
-is how you know.
-
-**4. The Model SDK container.** `--workspace` is the folder that appears inside it, so
-put `best.pt` there:
-
-```bash
-sima-cli sdk setup --workspace ~/workspace
-sima-cli sdk model         # opens the Model SDK shell
-```
-
-**5. Convert.** Inside that shell, in `~/workspace`:
-
-```bash
-pip install sima-vision ultralytics
-sima-vision compile best.pt          # -> build/best_mpk.tar.gz
-```
-
-That is the whole conversion. It exports the raw-head ONNX the board's box decoder reads
-&mdash; six tensors, `bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled
-`[1, 84, 8400]` &mdash; then quantizes to bfloat16, tessellates for the MLA and emits the
-ELF, using the compile recipe a published pack shipped rather than a paraphrase of it.
-
-> [!NOTE]
-> **None of step 1 to 5 is needed to run a model, only to compile one.** Everything
-> earlier in this README works with no Docker and no WSL.
->
-> The compiler is the `afe` package and exists only in that container -- not on the
-> DevKit, not in PowerShell. `python -c "import afe"` says which side of the line you
-> are on, and `compile` run anywhere else gives you the ONNX plus the steps to finish
-> rather than a crash at the last one.
->
-> If `sima-cli sdk model` is missing, the Model Compiler extension was declined during
-> setup. Re-run `sima-cli sdk setup` and accept it; it is a 9 GB download.
-
-Either way, the pack ends up on the board the same way:
-
-```bash
-sima-vision push build/best_mpk.tar.gz
-sima-vision detect --model best_mpk.tar.gz
-```
-
-A URL works too, and is cached under `assets/models`:
-
-```bash
-sima-vision detect --model https://example.com/my-model.tar.gz
-```
-
-If the head is not YOLO26, say so with `--family`. Get that wrong and the box decoder
-reads the output tensor the wrong way, so every detection is noise rather than an error.
-
-## Use your own footage
 A path or an `https` URL. Raw H.264 and `.mp4` both work:
 
 ```bash
@@ -216,7 +109,146 @@ second. No `ffmpeg` needed, which matters because the DevKit has none.
 H.264 video only, in either case. A fragmented `.mp4`, or one holding something other than
 H.264, is refused by name rather than failing halfway through a run.
 
-## Flags worth knowing
+## 🧠 Your own model
+
+Trained a YOLO26 detection or segmentation model and want to run it on the board? It has
+to be compiled into a `.tar.gz` pack first.
+
+> [!IMPORTANT]
+> **This section is the only place Docker and WSL are needed, and only on your PC.**
+> Everything in [Quickstart](#-quickstart) works without either: a pretrained model on
+> the DevKit is just the two commands above. Nothing here runs on the board.
+
+The compiler is the `afe` package. It lives inside the Palette Model SDK container, which
+is x86 Docker, which on Windows means WSL2. Five steps to get there and convert.
+
+### 1. WSL2
+
+In **PowerShell as Administrator**:
+
+```powershell
+wsl --install -d Ubuntu
+wsl -l -v
+```
+
+Want `Ubuntu`, `Running`, version `2`.
+
+### 2. Docker Desktop
+
+Install [Docker Desktop](https://docs.docker.com/get-started/get-docker/), then turn on
+**Settings → Resources → WSL integration** for Ubuntu. Without that, `docker` works in
+PowerShell but is missing inside Ubuntu, which is where it is needed.
+
+### 3. Go into Ubuntu
+
+Everything from here down is typed in that shell, not in PowerShell:
+
+```powershell
+wsl -d Ubuntu
+```
+
+The prompt changes to something like `you@machine:~$`. `exit` comes back to PowerShell.
+Check the whole path now works:
+
+```bash
+docker run hello-world
+```
+
+Must print `Hello from Docker!`.
+
+### 4. sima-cli, inside Ubuntu
+
+It needs a virtualenv, because Ubuntu refuses a bare `pip install` with
+`externally-managed-environment`:
+
+```bash
+sudo apt update && sudo apt install -y python3-venv python3-pip
+python3 -m venv ~/sima
+source ~/sima/bin/activate
+pip install sima-cli
+sima-cli login
+```
+
+> [!NOTE]
+> `source ~/sima/bin/activate` is the line to remember. It is Linux, inside WSL, and has
+> no PowerShell equivalent. A new Ubuntu shell starts **outside** the venv, so `sima-cli`
+> is missing until you run it again. `(sima)` at the front of the prompt is how you know.
+
+Then pull the SDK image. Ten to fifteen minutes, once:
+
+```bash
+sima-cli install ghcr:sima-neat/sdk:v2.0.0
+```
+
+### 5. Convert
+
+`--workspace` is the folder that appears inside the container, so put your `.pt` there
+first:
+
+```bash
+sima-cli sdk setup --workspace ~/workspace
+sima-cli sdk model
+```
+
+That opens the Model SDK shell. Inside it, in `~/workspace`:
+
+```bash
+pip install sima-vision ultralytics
+sima-vision compile best.pt
+```
+
+Out comes `build/best_mpk.tar.gz`. That one command is the whole conversion: it exports
+the raw-head ONNX the board's box decoder reads (six tensors, `bbox_0..2` and
+`class_logit_0..2`, not ultralytics' assembled `[1, 84, 8400]`), then quantizes to
+bfloat16, tessellates for the MLA and emits the ELF, using the compile recipe a published
+pack shipped rather than a paraphrase of it.
+
+### 6. Run it on the board
+
+```bash
+sima-vision push build/best_mpk.tar.gz
+sima-vision detect --model best_mpk.tar.gz
+```
+
+A URL works too, and is cached under `assets/models`:
+
+```bash
+sima-vision detect --model https://example.com/my-model.tar.gz
+```
+
+<details>
+<summary>🩹 <b>If something goes wrong</b></summary>
+
+**`sima-cli sdk model` is missing.** The Model Compiler extension was declined during
+setup. Re-run `sima-cli sdk setup` and accept it. It is a 9 GB download.
+
+**`compile` produced only an ONNX.** The Model SDK is not importable where you ran it.
+`python -c "import afe"` says which side of the line you are on. Run it inside the Model
+SDK shell and it does every step; anywhere else it hands you the ONNX and the steps to
+finish, rather than crashing at the last one.
+
+**Every detection is noise.** The head is not YOLO26. Say so with `--family`: get it
+wrong and the box decoder reads the output tensor the wrong way, which is garbage rather
+than an error.
+
+</details>
+
+## 🔁 Moving files between the board and your PC
+
+Output lands beside the run, on the board. Name the board once and neither command needs
+`--host`:
+
+```powershell
+$env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"
+```
+
+```bash
+sima-vision pull
+sima-vision pull --into results/
+sima-vision push my-clip.h264
+```
+
+## 🚩 Flags worth knowing
 
 `sima-vision <command> --help` lists the rest.
 
@@ -224,7 +256,7 @@ H.264, is refused by name rather than failing halfway through a run.
 |:--|:--|
 | `--frames 200` | Stop after N frames. The quickest way to try something |
 | `--conf 0.5` | Raise the confidence floor. Default `0.30` |
-| `--no-video` / `--no-save` | Skip the recording or the stills. Together they are the cheapest possible run, which is how you tell a slow app apart from a stalled graph |
+| `--no-video` / `--no-save` | Skip the recording or the stills |
 | `--quiet` | Warnings, errors and the closing report only |
 | `--profile` | Per-stage timings, when a run is slower than it should be |
 | `--model my.tar.gz` | Your own compiled pack instead of the fetched one |
@@ -233,7 +265,7 @@ H.264, is refused by name rather than failing halfway through a run.
 Settings can also come from a `config.yaml` in the working directory, which is picked up
 on its own. Flags win over it, and it wins over the built-in defaults.
 
-## Environment
+## 🌱 Environment
 
 | Variable | What it does |
 |:--|:--|
@@ -246,7 +278,7 @@ on its own. Flags win over it, and it wins over the built-in defaults.
 | `SIMA_VISION_COLOR` | `0` or `1` to force colour off or on. `NO_COLOR` also works |
 | `FALL_ALERT_SMTP_PASSWORD` | The only place the SMTP password is ever read from |
 
-## Contributing
+## 🤝 Contributing
 
 ```bash
 git clone https://github.com/RizwanMunawar/sima-projects.git
@@ -259,12 +291,12 @@ pytest -q
 
 The tests need no board.
 
-## License
+## 📄 License
 
 The models used here for testing are **Ultralytics YOLO26**, under **AGPL-3.0**. All other
 parts of this repository are under **Apache-2.0**. See [LICENSE](LICENSE).
 
-## Credits
+## 🙏 Credits
 
 - [SiMa.ai](https://github.com/SiMa-ai) for Modalix, the Palette SDK and Neat
 - [Ultralytics](https://github.com/ultralytics/ultralytics) for the YOLO26 models
