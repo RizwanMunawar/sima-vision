@@ -242,3 +242,36 @@ def test_the_guidance_names_the_module_it_looked_for():
     assert "afe" in text, "name the module, so it can be checked"
     assert "Palette" in text and "x86" in text
     assert "not on the DevKit" in text, "the board cannot do this half"
+
+
+def test_dynamo_is_only_passed_to_a_torch_that_takes_it():
+    """torch 2.6 added the keyword; the Palette container's torch has not.
+
+    `export() got an unexpected keyword argument 'dynamo'` is where a real
+    conversion died, in the one environment that can finish the job.
+    """
+    class Modern:
+        class onnx:
+            @staticmethod
+            def export(model, args, f, *, input_names=None, output_names=None,
+                       opset_version=None, do_constant_folding=True, dynamo=True):
+                ...
+
+    class Older:
+        class onnx:
+            @staticmethod
+            def export(model, args, f, *, input_names=None, output_names=None,
+                       opset_version=None, do_constant_folding=True):
+                ...
+
+    assert export.legacy_exporter_kwargs(Modern) == {"dynamo": False}
+    assert export.legacy_exporter_kwargs(Older) == {}
+
+
+def test_an_unreadable_signature_is_not_fatal():
+    """A C-implemented export cannot be introspected; that is not a reason to stop."""
+    class Opaque:
+        class onnx:
+            export = print          # builtins refuse inspect.signature
+
+    assert export.legacy_exporter_kwargs(Opaque) == {}

@@ -131,6 +131,29 @@ def expected_shapes(imgsz: int, classes: int) -> dict[str, tuple[int, ...]]:
     return shapes
 
 
+def legacy_exporter_kwargs(torch) -> dict:
+    """``dynamo=False`` where the installed torch understands it, else nothing.
+
+    torch 2.6 made the dynamo exporter the default, and it renames outputs. The
+    board's decoder reads six tensors *by name*, so the TorchScript exporter is
+    the one that has to run. ``dynamo=False`` says so.
+
+    Older torch has no such keyword and rejects it outright:
+    ``export() got an unexpected keyword argument 'dynamo'``, which is what the
+    Palette Model SDK container gives. It does not need telling either, since
+    the exporter it has is the one we want. So the argument is passed only where
+    it means something, which is asked of the signature rather than guessed from
+    a version string.
+    """
+    import inspect
+
+    try:
+        accepted = inspect.signature(torch.onnx.export).parameters
+    except (TypeError, ValueError):  # pragma: no cover - a C-implemented export
+        return {}
+    return {"dynamo": False} if "dynamo" in accepted else {}
+
+
 def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
                 opset: int = DEFAULT_OPSET) -> dict[str, tuple[int, ...]]:
     """Write ``weights`` out as a raw-head ONNX at ``out``.
@@ -173,7 +196,7 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
             output_names=list(RAW_OUTPUTS),
             opset_version=opset,
             do_constant_folding=True,
-            dynamo=False,
+            **legacy_exporter_kwargs(torch),
         )
 
     got = onnx_output_shapes(out)
