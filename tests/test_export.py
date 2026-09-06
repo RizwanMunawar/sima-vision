@@ -93,15 +93,94 @@ def test_a_head_with_the_wrong_number_of_levels_is_refused():
 
 
 def test_something_that_is_not_a_detection_model_is_refused():
-    class Segment:
+    class Pose:
         pass
 
-    with pytest.raises(RuntimeError, match="not a YOLO detection model"):
-        export.check_head(FakeNet(Segment()))
+    with pytest.raises(RuntimeError, match="detection or segmentation"):
+        export.check_head(FakeNet(Pose()))
 
 
 def test_a_good_head_reports_its_levels_and_classes():
-    assert export.check_head(FakeNet(FakeHead(nc=7))) == (3, 7)
+    assert export.check_head(FakeNet(FakeHead(nc=7))) == (3, 7, 0)
+
+
+# -- the segmentation half of the contract --
+
+
+class FakeSegHead(FakeHead):
+    """A Segment head: a Detect head with a coefficient branch and protos."""
+
+    def __init__(self, nm=32, **kw):
+        super().__init__(**kw)
+        self.nm = nm
+        self.cv4 = [None] * self.nl
+        self.proto = lambda feats: None
+
+
+def test_the_segmentation_contract_matches_the_published_pack():
+    """yolo26n-seg's final PassThrough takes ten tensors, not six.
+
+    cast_2/bbox_0 through cast_7/class_logit_2, then cast_8/mask_coeff_0,
+    cast_9/mask_coeff_1, cast_10/mask_coeff_2 and cast_11/mask_proto. Segment
+    subclasses Detect, so a seg model exported as a detector passes every check
+    above and produces six of the ten: a pack that draws boxes and no masks.
+    """
+    assert export.SEG_OUTPUTS == (
+        "bbox_0", "bbox_1", "bbox_2",
+        "class_logit_0", "class_logit_1", "class_logit_2",
+        "mask_coeff_0", "mask_coeff_1", "mask_coeff_2",
+        "mask_proto",
+    )
+
+
+def test_the_mask_shapes_match_the_published_pack():
+    """Checked against yolo26n-seg's own byte sizes, as the box shapes are.
+
+    pass_through_out_6 is 819200 bytes, which is 204800 float32 -- 80x80x32.
+    out_9 is 3276800, which is 819200 -- 160x160x32, the prototypes at a
+    quarter of the input side.
+    """
+    shapes = export.expected_shapes(640, 80, masks=32)
+    assert shapes["mask_coeff_0"] == (1, 32, 80, 80)
+    assert shapes["mask_coeff_2"] == (1, 32, 20, 20)
+    assert shapes["mask_proto"] == (1, 32, 160, 160)
+
+    for name, size in (("mask_coeff_0", 819200), ("mask_proto", 3276800)):
+        floats = 1
+        for dim in shapes[name]:
+            floats *= dim
+        assert floats * 4 == size, f"{name} disagrees with the published pack"
+
+
+def test_the_outputs_come_out_in_the_order_the_pack_lists_them():
+    """Order is the contract: the board reads the tensors positionally."""
+    assert tuple(export.expected_shapes(640, 80, masks=32)) == export.SEG_OUTPUTS
+    assert tuple(export.expected_shapes(640, 80)) == export.RAW_OUTPUTS
+
+
+def test_a_segmentation_head_reports_its_coefficient_count():
+    assert export.check_head(FakeNet(FakeSegHead())) == (3, 80, 32)
+
+
+def test_a_detection_head_reports_no_coefficients():
+    """Asked of the head, so a detector called best-seg.pt is still a detector."""
+    assert export.mask_channels(FakeHead()) == 0
+
+
+def test_the_head_is_replaced_by_one_that_emits_every_branch():
+    """Ten tensors, boxes then classes then coefficients then the prototypes.
+
+    The wrapper is what actually decides the order, and it is checked here
+    without torch: the branches are stand-ins that report which one ran.
+    """
+    head = FakeSegHead()
+    head.cv2 = [lambda f, i=i: f"bbox_{i}" for i in range(3)]
+    head.cv3 = [lambda f, i=i: f"class_logit_{i}" for i in range(3)]
+    head.cv4 = [lambda f, i=i: f"mask_coeff_{i}" for i in range(3)]
+    head.proto = lambda f: "mask_proto"
+
+    wrapper = export.RawHead(FakeNet(head))
+    assert tuple(wrapper.outputs([0, 1, 2])) == export.SEG_OUTPUTS
 
 
 # ── the recipe travels inside the pack ──

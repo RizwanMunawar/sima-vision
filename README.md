@@ -81,20 +81,6 @@ you can see what would have gone out.
 
 </details>
 
-Your own video works the same way, as a path or an `https` URL:
-
-```bash
-sima-vision push my-clip.mp4             # on your PC
-sima-vision detect --source my-clip.mp4  # on the DevKit
-```
-
-H.264 only, but the container does not matter. The board decodes H.264 in hardware and
-`.mp4` hits a demuxer bug in Neat 0.3.0, so an `.mp4` is reframed into a raw stream on
-first use and cached beside it. That is a remux, not a re-encode: every coded bit
-survives, a 13 MB clip takes about a second, and no `ffmpeg` is involved, which matters
-because the DevKit has none. Anything that is not H.264 is refused by name rather than
-failing halfway through a run.
-
 ## Apps arguments
 
 Every flag, and which apps take it. All of them are for the three apps, which run on the

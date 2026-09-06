@@ -19,10 +19,20 @@ output           shape at 640x640    from
 ``class_logit_2``  ``[1, 80, 20, 20]``  ``Detect.cv3[2]``
 ===============  ==================  =========================
 
+A segmentation head adds four more, from the same place: ``mask_coeff_0..2``
+off ``Segment.cv4``, 32 coefficients a level, and ``mask_proto`` off
+``Segment.proto`` at a quarter of the input side. ``Segment`` subclasses
+``Detect``, so a seg model exported as a detector passes every check here and
+produces six of the ten, which compiles into a pack that draws boxes and no
+masks.
+
 Those names and that order are not invented here. They are read out of a
 working pack's own ``*_mpk.json``, where the final PassThrough carries exactly
-``bbox_0..2`` then ``class_logit_0..2``. Four box channels rather than 64 is
-YOLO26 having ``reg_max = 1``: no DFL to unpack.
+``bbox_0..2``, ``class_logit_0..2``, ``mask_coeff_0..2``, ``mask_proto``. Four
+box channels rather than 64 is YOLO26 having ``reg_max = 1``: no DFL to unpack.
+
+**The pipeline files.** The Model SDK's compile writes the ELF and the manifest
+and stops. What the board reads first is neither: see :mod:`sima_vision.pack`.
 
 **Compile.** ONNX to ``.tar.gz`` is the SiMa Model SDK's job -- quantization to
 bfloat16, MLA tessellation, and the ELF. That is the ``afe`` package inside the
@@ -43,6 +53,15 @@ BBOX_OUTPUTS = ("bbox_0", "bbox_1", "bbox_2")
 CLASS_OUTPUTS = ("class_logit_0", "class_logit_1", "class_logit_2")
 RAW_OUTPUTS = (*BBOX_OUTPUTS, *CLASS_OUTPUTS)
 
+#: What a segmentation head adds, again in the order its pack lists them: the
+#: per-level mask coefficients, then the one prototype tensor they weight.
+MASK_OUTPUTS = ("mask_coeff_0", "mask_coeff_1", "mask_coeff_2")
+PROTO_OUTPUT = "mask_proto"
+SEG_OUTPUTS = (*RAW_OUTPUTS, *MASK_OUTPUTS, PROTO_OUTPUT)
+
+#: The prototype masks come out at a quarter of the input side: 160 at 640.
+PROTO_STRIDE = 4
+
 #: The input the preprocess contract feeds: one RGB image, letterboxed square.
 INPUT_NAME = "images"
 DEFAULT_IMGSZ = 640
@@ -56,7 +75,7 @@ RECIPE_PREFIX = "archived_compile_script."
 
 
 class RawHead:
-    """Wraps a DetectionModel so its head returns the six raw tensors.
+    """Wraps a DetectionModel so its head returns the raw tensors.
 
     ``Detect.forward`` concatenates each level's box and class branches and
     then decodes them. Both have to go: the concatenation because the board
@@ -69,13 +88,17 @@ class RawHead:
     def __init__(self, net) -> None:
         self.net = net
         self.head = net.model[-1]
+        self.masks = mask_channels(self.head)
 
     def outputs(self, feats: list) -> list:
-        """The six tensors, boxes first, in the order the pack expects."""
+        """Every tensor the head produces, in the order the pack expects."""
         head = self.head
-        boxes = [head.cv2[i](feats[i]) for i in range(head.nl)]
-        classes = [head.cv3[i](feats[i]) for i in range(head.nl)]
-        return [*boxes, *classes]
+        tensors = [head.cv2[i](feats[i]) for i in range(head.nl)]
+        tensors += [head.cv3[i](feats[i]) for i in range(head.nl)]
+        if self.masks:
+            tensors += [head.cv4[i](feats[i]) for i in range(head.nl)]
+            tensors.append(head.proto(feats[0]))
+        return tensors
 
     def __enter__(self):
         self.original = self.head.forward
@@ -87,23 +110,38 @@ class RawHead:
         return False
 
 
-def check_head(net) -> tuple[int, int]:
+def mask_channels(head) -> int:
+    """How many mask coefficients a head emits, or 0 when it emits none.
+
+    ``Segment`` subclasses ``Detect``, so every check below passes for one and
+    the boxes it exports are right. What is not right is stopping there: the
+    head also has ``cv4``, a coefficient branch per level, and ``proto``, and a
+    pack built without them decodes boxes and no masks. Asked of the head
+    rather than of the file name, because a ``-seg`` in the name is not what
+    makes it one.
+    """
+    if not (hasattr(head, "cv4") and hasattr(head, "proto")):
+        return 0
+    return int(getattr(head, "nm", 0))
+
+
+def check_head(net) -> tuple[int, int, int]:
     """Refuse a model whose head cannot produce what the board decodes.
 
     Returns:
-        A ``(levels, classes)`` pair.
+        A ``(levels, classes, masks)`` triple. ``masks`` is 0 for a detection
+        head and the coefficient count for a segmentation one.
 
     Raises:
-        RuntimeError: When the head is not a three-level YOLO26 detection head.
+        RuntimeError: When the head is not a three-level YOLO26 head.
     """
     head = getattr(net, "model", [None])[-1]
     for attribute in ("nl", "nc", "cv2", "cv3"):
         if not hasattr(head, attribute):
             raise RuntimeError(
-                f"this is not a YOLO detection model: its head is "
-                f"{type(head).__name__}, which has no {attribute}.\n"
-                "  Segmentation and pose models have different heads and a "
-                "different box decoder;\n  only detection is supported here."
+                f"this is not a YOLO detection or segmentation model: its head "
+                f"is {type(head).__name__},\n  which has no {attribute}. Pose "
+                "and OBB heads have a different box decoder."
             )
     if head.nl != len(BBOX_OUTPUTS):
         raise RuntimeError(
@@ -118,16 +156,28 @@ def check_head(net) -> tuple[int, int]:
             "The board's decoder reads 4. That is a YOLOv8-style head,\n"
             "  not YOLO26."
         )
-    return head.nl, head.nc
+    return head.nl, head.nc, mask_channels(head)
 
 
-def expected_shapes(imgsz: int, classes: int) -> dict[str, tuple[int, ...]]:
-    """What each output should come out as, for checking the export."""
-    shapes = {}
-    for index, stride in enumerate((8, 16, 32)):
-        side = imgsz // stride
-        shapes[BBOX_OUTPUTS[index]] = (1, 4, side, side)
-        shapes[CLASS_OUTPUTS[index]] = (1, classes, side, side)
+def expected_shapes(imgsz: int, classes: int,
+                    masks: int = 0) -> dict[str, tuple[int, ...]]:
+    """What each output should come out as, for checking the export.
+
+    Insertion order is the order the pack's final PassThrough lists them in,
+    which is the order the export writes: every box tensor, every class tensor,
+    then the mask coefficients and the prototypes they weight.
+    """
+    sides = [imgsz // stride for stride in (8, 16, 32)]
+    shapes = {name: (1, 4, side, side) for name, side in zip(BBOX_OUTPUTS, sides, strict=True)}
+    shapes.update(
+        {name: (1, classes, side, side) for name, side in zip(CLASS_OUTPUTS, sides, strict=True)}
+    )
+    if masks:
+        shapes.update(
+            {name: (1, masks, side, side) for name, side in zip(MASK_OUTPUTS, sides, strict=True)}
+        )
+        proto = imgsz // PROTO_STRIDE
+        shapes[PROTO_OUTPUT] = (1, masks, proto, proto)
     return shapes
 
 
@@ -135,7 +185,7 @@ def legacy_exporter_kwargs(torch) -> dict:
     """``dynamo=False`` where the installed torch understands it, else nothing.
 
     torch 2.6 made the dynamo exporter the default, and it renames outputs. The
-    board's decoder reads six tensors *by name*, so the TorchScript exporter is
+    board's decoder reads its tensors *by name*, so the TorchScript exporter is
     the one that has to run. ``dynamo=False`` says so.
 
     Older torch has no such keyword and rejects it outright:
@@ -182,8 +232,8 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
         ) from exc
 
     net = YOLO(str(weights)).model.eval()
-    _, classes = check_head(net)
-    wanted = expected_shapes(imgsz, classes)
+    _, classes, masks = check_head(net)
+    wanted = expected_shapes(imgsz, classes, masks)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     dummy = torch.zeros(1, 3, imgsz, imgsz)
@@ -193,7 +243,7 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
             dummy,
             str(out),
             input_names=[INPUT_NAME],
-            output_names=list(RAW_OUTPUTS),
+            output_names=list(wanted),
             opset_version=opset,
             do_constant_folding=True,
             **legacy_exporter_kwargs(torch),
@@ -202,7 +252,7 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
     got = onnx_output_shapes(out)
     wrong = {
         name: (wanted[name], got.get(name))
-        for name in RAW_OUTPUTS
+        for name in wanted
         if got.get(name) != wanted[name]
     }
     if wrong:

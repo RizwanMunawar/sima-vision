@@ -36,7 +36,7 @@ and ``--help`` work anywhere.
 
 from __future__ import annotations
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 
 from .api import load, run, validate
 

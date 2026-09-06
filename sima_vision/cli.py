@@ -52,6 +52,7 @@ from .export import (
     run_recipe,
 )
 from .neat import describe_preprocess
+from .pack import complete_pack
 from .runloop import Stopper
 from .runtime import FAMILY_DECODE_TOKENS
 from .tasks import TASKS
@@ -308,7 +309,11 @@ def add_compile_parser(subparsers) -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("weights", help="Trained YOLO26 detection .pt.")
+    parser.add_argument(
+        "weights",
+        help="Trained YOLO26 .pt. Detection and segmentation both compile; "
+             "a segmentation model keeps its mask coefficients.",
+    )
     parser.add_argument(
         "--out", metavar="DIR", default="build",
         help="Where the ONNX and the recipe are written. Default build/.",
@@ -402,7 +407,7 @@ def run_compile(args) -> int:
     onnx_path = out_dir / f"{weights.stem}-raw.onnx"
     with console.step(f"Exporting {weights.name} to ONNX", "export") as step:
         step.note(
-            "the board decodes boxes itself, so the head's six raw tensors are exported\n"
+            "the board decodes boxes itself, so the head's raw tensors are exported\n"
             "rather than ultralytics' assembled [1, 84, 8400] output"
         )
         shapes = export_onnx(weights, onnx_path, args.imgsz, args.opset)
@@ -428,11 +433,40 @@ def run_compile(args) -> int:
 
         step.note("quantizing and tessellating. This takes a few minutes.")
         pack = run_recipe(recipe_path, onnx_path, out_dir)
+        finish_pack(pack, step)
         step.done(f"{pack} ({human_bytes(pack.stat().st_size)})")
 
     console.report(f"run it with:  sima-vision detect --model {pack.name}")
     console.report(f"send it over: sima-vision push {pack}")
     return 0
+
+
+def reference_pack() -> Path | None:
+    """A published pack, to copy out of. Any of them will do.
+
+    Two things are taken from one: the compile recipe, and the pipeline files
+    that the Model SDK's own output does not carry. Both are the same in every
+    pack, so the first one on disk is as good as any.
+    """
+    packs = sorted(models_dir().glob("*.tar.gz"))
+    return packs[0] if packs else None
+
+
+def finish_pack(pack: Path, step) -> None:
+    """Add the pipeline files the board reads, when the compile left them out.
+
+    The Model SDK writes the ELF and the manifest. What the board's preprocess
+    planner looks for first is `pipeline_sequence.json` and the two plugin
+    configs beside it, and a pack without them fails on the board rather than
+    here, a minute into a run, with a message about a missing MLA stage.
+    """
+    reference = reference_pack()
+    if reference is None:
+        step.note("no published pack here to check this one against")
+        return
+    added = complete_pack(pack, reference)
+    if added:
+        step.detail(f"added {', '.join(added)} from {reference.name}")
 
 
 def write_recipe(out_dir: Path, step, fetch_if_missing: bool = False) -> Path | None:
@@ -450,30 +484,30 @@ def write_recipe(out_dir: Path, step, fetch_if_missing: bool = False) -> Path | 
             download for a file inside it, which is worth it to finish the job
             and not worth it on a machine that was going to stop anyway.
     """
-    packs = sorted(models_dir().glob("*.tar.gz"))
-    if not packs and fetch_if_missing:
+    pack = reference_pack()
+    if pack is None and fetch_if_missing:
         # Every pack carries the same recipe, so the smallest one will do.
         step.detail("no pack here to take a recipe from, fetching the nano one")
         try:
             ensure_model(default_model_path("detect"), "detect", step)
         except RuntimeError as exc:
             step.note(str(exc))
-        packs = sorted(models_dir().glob("*.tar.gz"))
-    if not packs:
+        pack = reference_pack()
+    if pack is None:
         step.note(
             "no model pack here to copy a recipe from. Any real run fetches one,\n"
             "and the recipe comes inside it."
         )
         return None
     try:
-        script = compile_recipe(packs[0])
+        script = compile_recipe(pack)
     except (RuntimeError, OSError, tarfile.TarError) as exc:
-        step.note(f"could not read a recipe from {packs[0].name}: {exc}")
+        step.note(f"could not read a recipe from {pack.name}: {exc}")
         return None
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "compile_modelsdk.py"
     path.write_text(script, encoding="utf-8")
-    step.detail(f"recipe from {packs[0].name} -> {path}")
+    step.detail(f"recipe from {pack.name} -> {path}")
     return path
 
 
