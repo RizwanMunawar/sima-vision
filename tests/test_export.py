@@ -275,3 +275,49 @@ def test_an_unreadable_signature_is_not_fatal():
             export = print          # builtins refuse inspect.signature
 
     assert export.legacy_exporter_kwargs(Opaque) == {}
+
+
+RECORDING_RECIPE = """
+import argparse
+import pathlib
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model")
+parser.add_argument("--build-dir")
+args = parser.parse_args()
+
+# Everything the recipe was handed, recorded where the test can read it back.
+build = pathlib.Path(args.build_dir)
+build.mkdir(parents=True, exist_ok=True)
+(build / "given.txt").write_text(args.model + chr(10) + args.build_dir, encoding="utf-8")
+(build / "out_mpk.tar.gz").write_bytes(b"pack")
+"""
+
+
+def test_the_recipe_is_given_absolute_paths(tmp_path, monkeypatch):
+    """It runs with cwd set to its own directory, so relatives double up.
+
+    A real conversion died on
+    `can't open file '/workspace/build/build/compile_modelsdk.py'`: the recipe
+    lived in `build/`, was named relative to the working directory, and was
+    then resolved against `build/` again.
+    """
+    monkeypatch.chdir(tmp_path)
+    build = tmp_path / "build"
+    build.mkdir()
+    onnx = tmp_path / "best-raw.onnx"
+    onnx.write_bytes(b"onnx")
+    recipe = build / "archived_compile_script.v1.py"
+    recipe.write_text(RECORDING_RECIPE, encoding="utf-8")
+
+    # Exactly as the CLI has them: relative to where the user is standing.
+    pack = export.run_recipe(
+        Path("build/archived_compile_script.v1.py"),
+        Path("best-raw.onnx"),
+        Path("build"),
+    )
+    assert pack.is_file()
+
+    model_arg, build_arg = (build / "given.txt").read_text(encoding="utf-8").splitlines()
+    assert Path(model_arg).is_absolute() and Path(model_arg) == onnx.resolve()
+    assert Path(build_arg).is_absolute() and Path(build_arg) == build.resolve()

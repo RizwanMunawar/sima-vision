@@ -272,6 +272,12 @@ def run_recipe(recipe: Path, onnx: Path, build_dir: Path,
     import subprocess
     import sys
 
+    # Absolute, every one of them. The recipe runs with cwd set to its own
+    # directory, so a relative `build/compile_modelsdk.py` resolved against
+    # `build/` and the interpreter was handed `build/build/...`, which is not
+    # there. The same doubling applied to --model and --build-dir.
+    recipe, onnx, build_dir = (p.resolve() for p in (recipe, onnx, build_dir))
+
     before = {p.resolve() for p in build_dir.glob(PACK_GLOB)}
     result = subprocess.run(  # noqa: S603
         [sys.executable, str(recipe), "--model", str(onnx),
