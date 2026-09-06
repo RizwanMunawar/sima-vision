@@ -125,7 +125,20 @@ No path and no URL: a published name is downloaded into `assets/models` and reus
 ### Your own model
 
 Train a YOLO26 detector, then convert it **inside the Palette Model SDK container** --
-that is where the compiler lives, and it is four commands to get there:
+that is where the compiler lives, and it is four commands to get there.
+
+> [!IMPORTANT]
+> **Docker has to be installed and running on your PC first.** Palette *is* a set of
+> Docker containers, so `sima-cli sdk` has nothing to start without it. Get
+> [Docker Desktop](https://docs.docker.com/get-started/get-docker/) on Windows or macOS,
+> or Docker Engine on Linux, then check it before going further:
+>
+> ```bash
+> docker run hello-world      # must print "Hello from Docker!"
+> ```
+>
+> None of this is needed to *run* models, only to compile one. Everything above works
+> with no Docker at all.
 
 ```bash
 # On your PC, once: mount the folder holding best.pt into the SDK containers
