@@ -256,6 +256,11 @@ sandbox/
 *.pt
 *.onnx
 
+# `sima-cli install` drops the SDK container's config and its TLS keypair
+# beside wherever it was run. A private key does not belong in a repository,
+# and this one arrived in a commit before anyone looked.
+.ghcr.io-*/
+
 # Terminal captures
 logs.txt
 *.log
