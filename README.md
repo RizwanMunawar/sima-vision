@@ -138,23 +138,39 @@ wsl -l -v                  # want: Ubuntu, Running, 2
 ```
 
 Install [Docker Desktop](https://docs.docker.com/get-started/get-docker/), then turn on
-**Settings > Resources > WSL integration** for Ubuntu. Everything after this runs
-**inside Ubuntu**:
+**Settings > Resources > WSL integration** for Ubuntu.
+
+**2. Go into Ubuntu.** Everything from here down is typed in that shell, not in
+PowerShell. From PowerShell:
+
+```powershell
+wsl -d Ubuntu
+```
+
+The prompt changes to something like `you@machine:~$`. That is where the rest of this
+happens; `exit` comes back to PowerShell.
 
 ```bash
 docker run hello-world     # must print "Hello from Docker!"
 ```
 
-**2. sima-cli, in WSL.** It needs a virtualenv; Ubuntu refuses a bare `pip install`:
+**3. sima-cli.** It needs a virtualenv -- Ubuntu refuses a bare `pip install` with
+`externally-managed-environment`:
 
 ```bash
 sudo apt update && sudo apt install -y python3-venv python3-pip
-python3 -m venv ~/sima && source ~/sima/bin/activate
+python3 -m venv ~/sima
+source ~/sima/bin/activate     # note: `source`, in Ubuntu. There is no
+                               # PowerShell equivalent -- ~/sima is a Linux venv
 pip install sima-cli
-sima-cli login             # needs a community.sima.ai account
+sima-cli login                 # needs a community.sima.ai account
 ```
 
-**3. The Model SDK container.** `--workspace` is the folder that appears inside it, so
+The `source` line is the one to remember: a new Ubuntu shell starts outside the venv, and
+`sima-cli` is only on the path once it has been run. `(sima)` at the front of the prompt
+is how you know.
+
+**4. The Model SDK container.** `--workspace` is the folder that appears inside it, so
 put `best.pt` there:
 
 ```bash
@@ -162,7 +178,7 @@ sima-cli sdk setup --workspace ~/workspace
 sima-cli sdk model         # opens the Model SDK shell
 ```
 
-**4. Convert.** Inside that shell, in `~/workspace`:
+**5. Convert.** Inside that shell, in `~/workspace`:
 
 ```bash
 pip install sima-vision ultralytics
@@ -175,7 +191,7 @@ That is the whole conversion. It exports the raw-head ONNX the board's box decod
 ELF, using the compile recipe a published pack shipped rather than a paraphrase of it.
 
 > [!NOTE]
-> **None of step 1 to 4 is needed to run a model, only to compile one.** Everything
+> **None of step 1 to 5 is needed to run a model, only to compile one.** Everything
 > earlier in this README works with no Docker and no WSL.
 >
 > The compiler is the `afe` package and exists only in that container -- not on the
