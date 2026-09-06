@@ -162,71 +162,47 @@ beats the built-in defaults.
 
 ![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
 
-A trained `.pt` has to be compiled into a `.tar.gz` pack before the board can run it.
-
-> [!IMPORTANT]
-> Docker and WSL are needed here and nowhere else, and both live on your PC.
-> [Quickstart](#quickstart) needs neither.
+A trained `.pt` has to be compiled into a `.tar.gz` pack before the board can run it. The
+compiler is the `afe` package and exists only inside the Palette Model SDK container,
+which is x86 Docker, which on Windows means WSL2. So the whole of this runs on your PC,
+needs a [community.sima.ai](https://community.sima.ai) account and ~10 GB of disk, and
+takes about 30 minutes the first time. [Quickstart](#quickstart) needs none of it.
 
 <details>
-<summary>🧠 &nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b> &nbsp;·&nbsp; six steps, about 30 minutes the first time</summary>
+<summary>🧠 &nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b></summary>
 
 <br>
 
-Needs a [community.sima.ai](https://community.sima.ai) account and ~10 GB of disk. The
-compiler is the `afe` package and exists only inside the Palette Model SDK container:
-x86 Docker, which on Windows means WSL2.
-
-**1. WSL2** &nbsp; PowerShell, as Administrator
-
-```powershell
+```bash
+# --- PowerShell, as Administrator -------------------------------------------
 wsl --install -d Ubuntu
-wsl -l -v                            # want: Ubuntu, Running, 2
-```
+wsl -l -v                             # want: Ubuntu, Running, 2
 
-**2. Docker Desktop** &nbsp; [install it](https://docs.docker.com/get-started/get-docker/),
-then **Settings → Resources → WSL integration** → on, for Ubuntu
+# Install Docker Desktop, then Settings > Resources > WSL integration > Ubuntu.
+# Without that toggle docker works in PowerShell and is missing inside Ubuntu.
 
-Without that toggle `docker` works in PowerShell and is missing inside Ubuntu.
+wsl -d Ubuntu                         # everything below is Ubuntu. exit comes back
 
-**3. Into Ubuntu** &nbsp; everything below is typed there; `exit` comes back
+# --- Ubuntu ------------------------------------------------------------------
+docker run hello-world                # must print "Hello from Docker!"
 
-```powershell
-wsl -d Ubuntu
-```
-
-```bash
-docker run hello-world               # must print "Hello from Docker!"
-```
-
-**4. sima-cli**
-
-```bash
 sudo apt update && sudo apt install -y python3-venv python3-pip
-python3 -m venv ~/sima               # Ubuntu refuses a bare pip install
-source ~/sima/bin/activate           # every new shell starts outside it. Look for (sima)
+python3 -m venv ~/sima                # Ubuntu refuses a bare pip install
+source ~/sima/bin/activate            # new shells start outside it. Look for (sima)
 pip install sima-cli
 sima-cli login
-sima-cli install ghcr:sima-neat/sdk:v2.0.0     # several GB, once per machine
-```
+sima-cli install ghcr:sima-neat/sdk:v2.0.0    # several GB, once per machine
 
-**5. Convert** &nbsp; run from the directory holding your `.pt`
-
-```bash
-sima-cli sdk setup --workspace .     # . is what gets mounted. 15-20 minutes
+cd /path/to/your/model                # the folder holding best.pt
+sima-cli sdk setup --workspace .      # . is what gets mounted. 15-20 minutes
 activate-model-compiler
-```
 
-```bash
+# --- Model SDK shell ---------------------------------------------------------
 pip install sima-vision ultralytics
-sima-vision compile best.pt          # -> build/best_mpk.tar.gz, 10-15 minutes
-```
+sima-vision compile best.pt           # ONNX, bfloat16, tessellate, ELF. 10-15 minutes
+                                      # -> build/best_mpk.tar.gz
 
-One command, four stages: raw-head ONNX, bfloat16 quantization, MLA tessellation, ELF.
-
-**6. Run it** &nbsp; ![on the DevKit](https://img.shields.io/badge/run_on-DevKit-E63946?style=flat-square)
-
-```bash
+# --- on the DevKit -----------------------------------------------------------
 sima-vision push build/best_mpk.tar.gz
 sima-vision detect --model best_mpk.tar.gz
 sima-vision detect --model https://example.com/my-model.tar.gz   # a URL works too
