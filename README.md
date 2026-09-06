@@ -18,44 +18,45 @@
 
 </div>
 
-**Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.** Object detection, instance
-segmentation and fall detection: three apps, one pipeline, no setup step.
+**Computer vision applications on the SiMa.ai Modalix DevKit 3.0.** Object detection,
+instance segmentation, fall detection and more: one pipeline, no setup step. Needs a
+[Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10
+or later.
 
-Needs a [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10 or later. Everything below runs **on the
-board** unless it says otherwise.
+- [Quickstart](#quickstart)
+- [Apps arguments](#apps-arguments)
+- [Your own model](#your-own-model)
+- [Moving files](#moving-files)
+- [Environment](#environment)
 
 ## Quickstart
 
-### 1 &middot; Install the SiMa.ai Neat Core
+![on the DevKit](https://img.shields.io/badge/run_on-DevKit-E63946?style=flat-square)
+
+No Docker, no WSL, no login. Every command here is typed on the board.
 
 ```bash
 sima-cli login
-sima-cli neat install core@v0.3.0
-```
+sima-cli neat install core@v0.3.0    # once per board
 
-### 2 &middot; Install sima-vision
-
-```bash
 pip install sima-vision
-```
-
-### 3 &middot; Run it
-
-**Nothing to download first.** Each app fetches its own pretrained YOLO26 pack and a demo
-clip into `./assets` on its first run, then runs. Every run after that reuses them.
-
-| App | Fetched for you | Writes |
-|:--|:--|:--|
-| `detect` | `yolo26m-det-bf16-mla_tess-b1.tar.gz` (66 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
-| `segment` | `yolo26m-seg-bf16-mla_tess-b1.tar.gz` + the same clip | `segmentation.mp4`, `frames/` |
-| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
-
-```bash
 sima-vision detect
 ```
 
+The first run fetches a pretrained YOLO26 pack and a demo clip into `./assets`, then runs.
+Every run after that reuses them. Both come from one public GitHub release, so getting
+them needs no login and no `sima-cli`.
+
+| App | Fetched for you | Writes |
+|:--|:--|:--|
+| `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
+| `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4`, `frames/` |
+| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
+
 <details>
-<summary><b>Instance segmentation</b> &nbsp;&middot;&nbsp; per-pixel masks, with an optional blur</summary>
+<summary>🎨 &nbsp;<b>Instance segmentation</b> &nbsp;·&nbsp; per-pixel masks, with an optional blur</summary>
+
+<br>
 
 ```bash
 sima-vision segment
@@ -66,67 +67,151 @@ sima-vision segment --blur --keep-classes person
 </details>
 
 <details>
-<summary><b>Fall detection</b> &nbsp;&middot;&nbsp; tracks people, with optional email alerts</summary>
+<summary>🚨 &nbsp;<b>Fall detection</b> &nbsp;·&nbsp; tracks people, with optional email alerts</summary>
+
+<br>
 
 ```bash
 sima-vision fall
 sima-vision fall --alert-to ops@example.com
 ```
 
-Nothing is emailed until you pass `--send`; without it a fall is composed and logged so
+Nothing is emailed until you pass `--send`. Without it a fall is composed and logged, so
 you can see what would have gone out.
 
 </details>
 
-> [!TIP]
-> **That is the whole setup.** No setup command, no config file, nothing to download by
-> hand. A run finds the Neat runtime, puts the board's numpy and OpenCV on the path,
-> fetches whatever is missing, and says what it is doing at every stage.
->
-> Everything below is optional. Take what you need.
+## Apps arguments
 
-## Moving files between the board and your PC
+Every flag, and which apps take it. All of them are for the three apps, which run on the
+DevKit. `sima-vision <app> --help` prints the same list.
 
-Output lands beside the run, on the board. Name the board once and neither command needs
+| Flag | Apps | What it does |
+|:--|:--|:--|
+| `--source`, `-s URI` | all | File, `https` URL, RTSP URL, or empty for the sample clip |
+| `--source-type` | all | `video`, `rtsp` or `usb`. Default `video` |
+| `--fps N` | all | Source frame rate. Default `0`, read from the stream |
+| `--width PX` | all | Source width. Default `0`, read from the stream's SPS |
+| `--height PX` | all | Source height. Default `0`, read from the stream's SPS |
+| `--model`, `-m PATH` | all | Compiled pack, or an `https` URL to one. Empty fetches this app's default |
+| `--labels PATH` | all | Newline-separated class names. Defaults to the packaged COCO list |
+| `--family NAME` | all | Detection head. Must match the model or every box is noise |
+| `--conf T` | all | Minimum confidence. Default `0.30` |
+| `--iou T` | all | Non-max suppression IoU. Default `0.60` |
+| `--max-det N` | all | Top-K cap per frame. Default `50` |
+| `--frames`, `-n N` | all | Stop after N frames. Default `0`, runs until interrupted |
+| `--timeout MS` | all | How long to wait for a frame before giving up. Default `20000` |
+| `--video-path PATH` | all | Where the annotated recording is written |
+| `--no-video` | all | Do not record |
+| `--save-dir DIR` | all | Where annotated stills are written |
+| `--save-every N` | all | Write every Nth still. Default `10`; `0` disables |
+| `--no-save` | all | Do not write stills |
+| `--no-hud` | all | Leave the frame-rate badge off the overlay |
+| `--insight` | all | Stream to Neat Insight over UDP. Off by default |
+| `--insight-host HOST` | all | Insight address as the board sees it. Default `127.0.0.1` |
+| `--config`, `-c PATH` | all | Config file. Defaults to `./config.yaml` |
+| `--no-config` | all | Ignore any config file and use defaults plus these flags |
+| `--validate` | all | Resolve and check the settings, then stop. Needs no board |
+| `--quiet`, `-q` | all | Warnings, errors and the closing report only |
+| `--profile` | all | Per-stage timings, when a run is slower than it should be |
+| `--queue-depth N` | all | Neat's own queue depth. Every slot holds a decoded frame, so raising it makes a starved run worse. Default `1` |
+| `--sink-queue-depth N` | all | Finished frames that may wait for the recorder. Host memory only. Default `12` |
+| `--sink-queue-mb MB` | all | Memory budget for that backlog, which grows it to fit a known clip |
+| `--output-buffers N` | all | Buffers each public output may hold. Default `1` |
+| `--decoder-buffers N` | all | Buffers to ask the decoder for. Default `0`, sized from the stream's reference frames |
+| `--segment-frames N` | all | Frames per piece when a clip is too long for one decode. Default `150`; `0` runs it whole |
+| `--blur` / `--no-blur` | `segment` | Blur the background and keep instances sharp, or draw a plain overlay |
+| `--blur-method` | `segment` | `gaussian`, `pixelate` or `none`. Default `gaussian` |
+| `--blur-strength PX` | `segment` | Gaussian kernel width at 1080p. Default `41` |
+| `--keep-classes CLASS...` | `segment` | Names or ids that stay sharp. Default: every detected class |
+| `--anonymise`, `--anonymize` | `segment` | Blur the instances instead of the background |
+| `--mask-threshold T` | `segment` | Mask cut-off as a probability. Default `0.5`; lower grows instances |
+| `--no-masks` | `segment` | Blur around plain boxes instead. Needs no segment head |
+| `--minimal` | `segment` | Pull frames and do nothing else. Tells a slow app from a stalled graph |
+| `--classes CLASS...` | `fall` | Classes that can fall. Default `person` |
+| `--confirm S` | `fall` | How long a fall signal must hold before it counts. Default `1.5` |
+| `--no-fall` | `fall` | Track without judging falls, which is how you tune tracking first |
+| `--alert-to EMAIL...` | `fall` | Recipients. Implies `--alerts` |
+| `--alert-from EMAIL` | `fall` | From address |
+| `--alerts` | `fall` | Enable alerts. Still a dry run until `--send` |
+| `--send` | `fall` | Actually connect to the SMTP server |
+| `--smtp-host HOST` | `fall` | SMTP server. Default `smtp.gmail.com` |
+| `--smtp-port PORT` | `fall` | `587` for STARTTLS, `465` for SSL. Default `587` |
+| `--smtp-user USER` | `fall` | SMTP login. The password comes from `$FALL_ALERT_SMTP_PASSWORD` and nowhere else |
+| `--site NAME` | `fall` | Camera name, used in the alert subject and body |
+| `--test-alert` | `fall` | Send one fake alert and exit. Proves the SMTP settings without a fall, or a board |
+
+A `config.yaml` in the working directory is picked up on its own. Flags beat it, and it
+beats the built-in defaults.
+
+## Your own model
+
+![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
+
+A trained `.pt` has to be compiled into a `.tar.gz` pack before the board can run it. The
+compiler is the `afe` package and exists only inside the Palette Model SDK container,
+which is x86 Docker, which on Windows means WSL2. So the whole of this runs on your PC,
+needs a [community.sima.ai](https://community.sima.ai) account and ~10 GB of disk, and
+takes about 30 minutes the first time. [Quickstart](#quickstart) needs none of it.
+
+<details>
+<summary>🧠 &nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b></summary>
+
+<br>
+
+```bash
+# --- PowerShell, as Administrator -------------------------------------------
+wsl --install -d Ubuntu
+wsl -l -v                             # want: Ubuntu, Running, 2
+
+# Install Docker Desktop, then Settings > Resources > WSL integration > Ubuntu.
+# Without that toggle docker works in PowerShell and is missing inside Ubuntu.
+
+wsl -d Ubuntu                         # everything below is Ubuntu. exit comes back
+
+# --- Ubuntu ------------------------------------------------------------------
+docker run hello-world                # must print "Hello from Docker!"
+
+sudo apt update && sudo apt install -y python3-venv python3-pip
+python3 -m venv ~/sima                # Ubuntu refuses a bare pip install
+source ~/sima/bin/activate            # new shells start outside it. Look for (sima)
+pip install sima-cli
+sima-cli login
+sima-cli install ghcr:sima-neat/sdk:v2.0.0    # several GB, once per machine
+
+cd /path/to/your/model                # the folder holding best.pt
+sima-cli sdk setup --workspace .      # . is what gets mounted. 15-20 minutes
+activate-model-compiler
+
+# --- Model SDK shell ---------------------------------------------------------
+pip install sima-vision ultralytics
+sima-vision compile best.pt           # ONNX, bfloat16, tessellate, ELF. 10-15 minutes
+                                      # -> build/best_mpk.tar.gz
+
+# --- on the DevKit -----------------------------------------------------------
+sima-vision push build/best_mpk.tar.gz
+sima-vision detect --model best_mpk.tar.gz
+sima-vision detect --model https://example.com/my-model.tar.gz   # a URL works too
+```
+
+</details>
+
+## Moving files
+
+![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
+
+Output lands beside the run, on the board, and both commands are typed on your PC. Name the board once and neither command needs
 `--host`:
 
-```bash
-export SIMA_VISION_DEVKIT=sima@<devkit-ip>      # Linux, macOS
-$env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"      # Windows PowerShell
+```powershell
+$env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"
 ```
 
 ```bash
-sima-vision pull                   # DevKit -> host, whatever the run left
-sima-vision pull --into results/   # ...into a directory of your choosing
-sima-vision push my-clip.h264      # host -> DevKit
+sima-vision pull                     # everything the run left
+sima-vision pull --into results/
+sima-vision push my-clip.h264
 ```
-
-## Use your own footage
-A path or an `https` URL. It must be raw H.264, never `.mp4`: the board decodes H.264 in
-hardware, and a container hits a demuxer bug in Neat 0.3.0. Convert once, losslessly:
-
-```bash
-ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
-sima-vision push clip.h264
-sima-vision detect --source clip.h264
-```
-
-## Flags worth knowing
-
-`sima-vision <command> --help` lists the rest.
-
-| Flag | What it does |
-|:--|:--|
-| `--frames 200` | Stop after N frames. The quickest way to try something |
-| `--conf 0.5` | Raise the confidence floor. Default `0.30` |
-| `--no-video` / `--no-save` | Skip the recording or the stills. Together they are the cheapest possible run, which is how you tell a slow app apart from a stalled graph |
-| `--quiet` | Warnings, errors and the closing report only |
-| `--profile` | Per-stage timings, when a run is slower than it should be |
-| `--model my.tar.gz` | Your own compiled pack instead of the fetched one |
-| `--validate` | Resolve and check the settings, then stop. Needs no board |
-
-Settings can also come from a `config.yaml` in the working directory, which is picked up
-on its own. Flags win over it, and it wins over the built-in defaults.
 
 ## Environment
 

@@ -10,12 +10,13 @@ timeout. The bytes on disk are authoritative, so this module reads them.
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
-from . import runtime
+from . import mp4, runtime
 from .bootstrap import NEAT_INSTALL, NEAT_VERSION
-from .console import console
+from .console import console, human_bytes
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Probing
@@ -225,6 +226,221 @@ def parse_sps(rbsp: bytes) -> tuple[int, int, int]:
     return width, height, fps
 
 
+#: Decoded frames the hardware decoder's pool holds, as the boot log reports it
+#: (``BufferNum=8``). Every one is 1920x1080 NV12 on this board.
+DECODER_POOL = 8
+
+#: What the source appsink alone declares in the pipeline pyneat generates:
+#: ``appsink ... max-buffers=4 drop=false``. Not settable from here.
+SOURCE_APPSINK_BUFFERS = 4
+
+#: Table A-1 of the H.264 spec: MaxDpbMbs per level, which is what bounds how
+#: many decoded frames a conforming decoder has to keep.
+MAX_DPB_MBS = {
+    10: 396, 11: 900, 12: 2376, 13: 2376, 20: 2376, 21: 4752, 22: 8100,
+    30: 8100, 31: 18000, 32: 20480, 40: 32768, 41: 32768, 42: 34816,
+    50: 110400, 51: 184320, 52: 184320, 60: 696320, 61: 696320, 62: 696320,
+}
+
+
+def dpb_frames(level_idc: int, width: int, height: int) -> int:
+    """How many frames this stream's decoded picture buffer has to hold.
+
+    Reference frames and frames waiting to be output in presentation order
+    both live in the DPB, so a stream with B-frames keeps several pictures
+    alive at once. Those are frames out of the same small pool the app is
+    trying to pull from, which is what makes the number worth knowing before
+    the run rather than after it stalls.
+    """
+    macroblocks = ((width + 15) // 16) * ((height + 15) // 16)
+    if macroblocks <= 0:
+        return 0
+    return min(MAX_DPB_MBS.get(level_idc, 32768) // macroblocks, 16)
+
+
+def probe_h264_dpb(path: str, scan_bytes: int = 4 << 20) -> tuple[int, int]:
+    """``(level_idc, max_num_ref_frames)`` from the first SPS, or ``(0, 0)``."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(scan_bytes)
+    except OSError:
+        return 0, 0
+
+    pos = 0
+    while True:
+        idx = head.find(b"\x00\x00\x01", pos)
+        if idx < 0:
+            return 0, 0
+        start = idx + 3
+        if start >= len(head):
+            return 0, 0
+        if head[start] & 0x1F == 7:
+            end = head.find(b"\x00\x00\x01", start)
+            try:
+                return parse_sps_dpb(unescape_rbsp(head[start + 1:end if end > 0 else len(head)]))
+            except (ValueError, IndexError):
+                return 0, 0
+        pos = start
+
+
+def parse_sps_dpb(rbsp: bytes) -> tuple[int, int]:
+    """Read only as far as ``max_num_ref_frames``, which is all this needs."""
+    r = BitReader(rbsp)
+    profile_idc = r.u(8)
+    r.u(8)
+    level_idc = r.u(8)
+    r.ue()
+
+    if profile_idc in HIGH_PROFILES:
+        chroma_format_idc = r.ue()
+        if chroma_format_idc == 3:
+            r.u(1)
+        r.ue()
+        r.ue()
+        r.u(1)
+        if r.u(1):
+            for i in range(8 if chroma_format_idc != 3 else 12):
+                if r.u(1):
+                    skip_scaling_list(r, 16 if i < 6 else 64)
+
+    r.ue()
+    pic_order_cnt_type = r.ue()
+    if pic_order_cnt_type == 0:
+        r.ue()
+    elif pic_order_cnt_type == 1:
+        r.u(1)
+        r.se()
+        r.se()
+        for _ in range(r.ue()):
+            r.se()
+    return level_idc, r.ue()
+
+
+#: Spare frames left over the strict requirement when sizing the pool. Two,
+#: because the strict sum has no room for a consumer that pauses even briefly,
+#: and buffers are cheap next to a run that stops half way.
+DECODER_SLACK = 2
+
+
+def decoder_buffers_for(cfg, width: int, height: int) -> int:
+    """How many buffers to ask the decoder for, or 0 to leave pyneat alone.
+
+    ``SimaDecodeOptions.num_buffers`` defaults to -1, which lets the daemon
+    pick, and what it picks is 8 for 1080p. The stream does not get a say, and
+    it should: a clip keeping five reference frames needs six of those eight
+    before the source appsink's four are counted, so the pool is oversubscribed
+    from the first frame and the run dies part-way through.
+
+    The SPS says how many reference frames the stream keeps, and it has already
+    been read by the time the graph is built, so the number can simply be
+    asked for.
+
+    Args:
+        cfg: Application configuration, for ``decoder_buffers`` and the source.
+        width: Source frame width.
+        height: Source frame height.
+
+    Returns:
+        A buffer count, or 0 to leave ``num_buffers`` unset.
+    """
+    if cfg.decoder_buffers > 0:
+        return cfg.decoder_buffers
+    if cfg.decoder_buffers < 0:                # explicitly "leave pyneat alone"
+        return 0
+    if not is_elementary_h264(cfg.source_uri):
+        return 0
+    level_idc, refs = probe_h264_dpb(cfg.source_uri)
+    if not level_idc:
+        return 0
+    # The worst of the two readings, not the stream's own. A decoder that sizes
+    # its pool from the level takes what the level permits whether the stream
+    # uses it or not, and which kind this one is cannot be settled from here.
+    #
+    # Sizing from the stream alone got this exactly backwards on a re-encoded
+    # clip: max_num_ref_frames=1 asked for 8, the number pyneat would have
+    # picked anyway, while the very same run warned that a level-sized decoder
+    # would want 5 and starve. Asking for the larger number costs a few
+    # megabytes and settles it.
+    held = max(refs, dpb_frames(level_idc, width, height)) + 1
+    needed = held + SOURCE_APPSINK_BUFFERS + DECODER_SLACK
+    return max(needed, cfg.decoder_pool)
+
+
+def decoder_budget_warning(path: str, width: int, height: int,
+                           pool: int = DECODER_POOL) -> str:
+    """Warn when the stream needs more of the pool than the pipeline leaves it.
+
+    The board's decoder pool is eight frames and it is shared. The stream's DPB
+    takes its share first -- five frames for High profile 1080p with B-frames,
+    which is what a phone or an editor produces by default -- and the source
+    appsink pyneat generates declares four more. Nine into eight does not go,
+    so the decoder is starved before the app has done anything wrong, and the
+    run dies part-way through with the pull timeout that looks like a stall.
+
+    Two numbers, because two kinds of decoder read the same stream
+    differently, and they disagree about exactly the streams worth re-encoding:
+
+    * ``max_num_ref_frames + 1`` is what the stream itself says it needs -- the
+      references it will reach back for, plus the picture being decoded.
+    * The level's DPB is the most a *conforming* decoder may hold at this frame
+      size, and a hardware decoder that sizes its pool from the level alone
+      takes that whether the stream uses it or not.
+
+    Getting this wrong is not academic. Sizing by level alone reported a 4
+    frame DPB for a stream re-encoded down to a single reference frame, which
+    would have sent someone off to re-encode a file that was already as
+    shallow as it goes.
+
+    Returns:
+        The warning, or "" when the stream fits either way.
+    """
+    level_idc, refs = probe_h264_dpb(path)
+    if not level_idc:
+        return ""
+    needed = refs + 1
+    capacity = dpb_frames(level_idc, width, height) + 1
+    spare = pool - SOURCE_APPSINK_BUFFERS
+    head = (
+        f"the decoder's pool is {pool} frames and the source appsink "
+        f"pyneat generates\n  declares max-buffers="
+        f"{SOURCE_APPSINK_BUFFERS} of them, leaving {spare} for the decoder itself."
+    )
+    ask = needed + SOURCE_APPSINK_BUFFERS + DECODER_SLACK
+    reencode = (
+        "  Ask the decoder for more, which is what --decoder-buffers does:\n"
+        f"    sima-vision detect --source clip.mp4 --decoder-buffers {ask}\n"
+        "  That is now the default, so this warning means it was turned off.\n"
+        "  Failing that, re-encode with fewer references:\n"
+        "    ffmpeg -i clip.mp4 -c:v libx264 -profile:v main -bf 0 -refs 1 \\\n"
+        "      -g 50 -keyint_min 50 -sc_threshold 0 -c:a copy shallow.mp4\n"
+        "  -bf 0 also puts the frames in presentation order, which is a separate\n"
+        "  win: the recording is written in arrival order."
+    )
+
+    if needed > spare:
+        return (
+            f"{head}\n"
+            f"  This stream declares max_num_ref_frames={refs}, so it needs "
+            f"{needed}. That does not fit,\n"
+            "  and the run will stop part-way through with a pull timeout. It is "
+            "not your\n  file -- the pool is shared, and this stream's own "
+            "buffering fills it.\n"
+            f"{reencode}"
+        )
+    if capacity > spare:
+        return (
+            f"{head}\n"
+            f"  This stream needs only {needed} (max_num_ref_frames={refs}), which "
+            f"fits. But level\n  {level_idc / 10:.1f} at {width}x{height} permits a "
+            f"DPB of {capacity - 1}, and a decoder that sizes its\n"
+            f"  pool from the level rather than from the stream would take "
+            f"{capacity} and starve.\n"
+            "  If this run stops part-way through with a pull timeout, that is why.\n"
+            f"{reencode}"
+        )
+    return ""
+
+
 def parse_vui_fps(r: BitReader) -> int:
     """Read timing_info out of a VUI block. Returns 0 when it is absent."""
     if r.u(1):  # aspect_ratio_info_present_flag
@@ -373,6 +589,64 @@ def is_elementary_h264(path: str) -> bool:
     return Path(path).suffix.lower() in ELEMENTARY_H264_SUFFIXES
 
 
+def annex_b_path(source: Path) -> Path:
+    """Where a remuxed container is cached: beside it, and obviously derived."""
+    return source.with_name(f"{source.stem}-annexb.h264")
+
+
+def needs_remux(path: Path) -> bool:
+    """Whether this file is a container that has to be reframed first.
+
+    Decided on content as well as on suffix. An MP4 renamed to ``.h264`` used
+    to be a hard error telling you to go and run ffmpeg; it is the same bytes
+    as any other MP4, so it can simply be remuxed like one.
+    """
+    if not path.is_file():
+        return False                      # check_source_file has better words
+    if mp4.is_container(str(path)):
+        return True
+    with path.open("rb") as handle:
+        return mp4.looks_like_mp4(handle.read(12))
+
+
+def ensure_annex_b(cfg, step=None):
+    """Reframe a container source into a raw stream, and point cfg at it.
+
+    Neat 0.3.0 cannot build a container source at all -- see
+    :func:`make_elementary_h264_source` for the demuxer naming bug -- so the
+    app used to stop and ask for ``ffmpeg``, on a board that does not have it.
+    The container holds the same H.264 the raw path already runs, so reframing
+    it here costs one pass over the file and no quality at all.
+
+    The result is cached beside the source and reused while it is newer, so
+    the cost lands on the first run only.
+
+    Args:
+        cfg: Application configuration.
+        step: Console step to report on, or None to stay quiet.
+
+    Returns:
+        ``cfg``, or a copy of it pointing at the remuxed stream.
+    """
+    if cfg.source_type != "video" or not needs_remux(Path(cfg.source_uri)):
+        return cfg
+
+    source = Path(cfg.source_uri)
+    out = annex_b_path(source)
+    fresh = out.is_file() and out.stat().st_mtime >= source.stat().st_mtime
+    if fresh:
+        if step is not None:
+            step.detail(f"have  {out.name}  (remuxed from {source.name} earlier)")
+    else:
+        frames = mp4.remux(source, out)
+        if step is not None:
+            step.detail(
+                f"remuxed {source.name} -> {out.name}  "
+                f"({frames} frames, {human_bytes(out.stat().st_size)})"
+            )
+    return replace(cfg, source_uri=str(out))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Source geometry
 # ─────────────────────────────────────────────────────────────────────────────
@@ -489,7 +763,7 @@ def check_source_file(cfg) -> int:
         # Annex-B streams open with a 3 or 4 byte start code. An MP4 carries
         # "ftyp" at offset 4, which is what a rename rather than a convert looks
         # like, and h264parse would simply never produce a frame.
-        annex_b = head.startswith(b"\x00\x00\x00\x01") or head.startswith(b"\x00\x00\x01")
+        annex_b = head.startswith((b"\x00\x00\x00\x01", b"\x00\x00\x01"))
         if not annex_b:
             hint = (
                 " That looks like an MP4 container renamed to .h264."
@@ -618,6 +892,16 @@ def make_elementary_h264_source(cfg, width: int, height: int, fps: int):
     dec.sima_allocator_type = 2
     dec.out_format = pyneat.Format.NV12
     dec.raw_output = False
+    # Left at pyneat's -1, the daemon sizes its own pool and reports it as
+    # BufferNum=8 for 1080p. Eight is not enough for a stream that keeps four
+    # or five reference frames: the DPB takes those plus the picture being
+    # decoded, the source appsink declares four more, and the sum is over
+    # eight before the app has done anything. That is the stall this whole
+    # branch chased, and the pool being askable for is the fix -- see
+    # :func:`decoder_buffers_for`.
+    requested = decoder_buffers_for(cfg, width, height)
+    if requested > 0:
+        dec.num_buffers = requested
     graph.add(pyneat.nodes.sima_decode(dec))
 
     # No CapsRaw node here, deliberately, and this is the difference between a

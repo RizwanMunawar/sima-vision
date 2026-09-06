@@ -22,7 +22,7 @@ import pytest
 
 from sima_vision import bootstrap, runtime
 from sima_vision.bootstrap import Environment
-from sima_vision.console import Console
+from sima_vision.console import BODY, ICONS, Console
 
 THIS = f"python{sys.version_info.major}.{sys.version_info.minor}"
 OTHER = "python3.7" if THIS != "python3.7" else "python3.8"
@@ -592,20 +592,23 @@ def test_quiet_keeps_warnings_and_drops_steps(capsys):
     assert "something you should know" in out
 
 
+def test_a_step_says_what_it_is_doing_before_it_does_it(capsys):
+    """A slow step must not be a silent one, so the line comes first."""
+    console = Console()
+    step = console.step("Loading the model", "model")
+    assert "Loading the model ..." in capsys.readouterr().out
+    step.done("80 classes")
+    assert "80 classes" in capsys.readouterr().out
+
+
 def test_a_step_that_raises_says_so(capsys):
     console = Console()
     with pytest.raises(ValueError):
-        with console.step("model", "loading"):
+        with console.step("Loading the model", "model"):
             raise ValueError("nope")
-    assert "failed" in capsys.readouterr().out
-
-
-def test_steps_are_numbered_against_the_plan(capsys):
-    console = Console()
-    console.plan(3)
-    console.step("one")
-    console.step("two")
-    assert "[1/3] one" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Loading the model ..." in out
+    assert console.icon("fail") in out
 
 
 def test_a_note_from_inside_a_step_is_indented_under_it(capsys):
@@ -616,33 +619,62 @@ def test_a_note_from_inside_a_step_is_indented_under_it(capsys):
     indented block.
     """
     console = Console()
-    console.plan(1)
-    with console.step("pipeline", "building the Neat graph"):
+    with console.step("Building the pipeline", "build"):
         console.note("raw H.264 elementary stream, demuxer bypassed")
     line = [ln for ln in capsys.readouterr().out.splitlines() if "demuxer" in ln][0]
-    assert line.startswith(" " * 8), repr(line)
+    assert line.startswith(BODY + "raw"), repr(line)
 
 
 def test_a_note_outside_a_step_is_not_indented(capsys):
     console = Console()
-    console.plan(1)
-    with console.step("pipeline", "building"):
+    with console.step("Building the pipeline", "build"):
         pass
     console.note("afterwards")
     line = [ln for ln in capsys.readouterr().out.splitlines() if "afterwards" in ln][0]
     assert line.startswith("  ") and not line.startswith("   "), repr(line)
 
 
-def test_everything_the_console_prints_is_ascii(capsys):
-    """A board's console encoding is nobody's guess; see test_portability."""
-    console = Console()
-    console.plan(2)
-    console.banner("sima-vision 0.1.0", "detect")
-    step = console.step("model", "loading")
+def test_a_stream_that_cannot_encode_icons_gets_plain_ascii():
+    """The icons are the one thing here that is not ASCII, so they are the risk.
+
+    Python picks an encoder for stdout the moment it is redirected. On a Windows
+    console that is often cp437, and printing an emoji there does not degrade --
+    it raises UnicodeEncodeError from inside `print` and takes the run down. The
+    stand-ins are what test_portability is really relying on.
+    """
+    import io
+
+    legacy = io.TextIOWrapper(io.BytesIO(), encoding="cp437", newline="")
+    console = Console(stream=legacy)
+    assert console.supports_icons is False
+
+    console.banner("sima-vision 2.0.0", "detect")
+    step = console.step("Loading the model", "model")
     step.detail("detail")
     step.note("note")
     step.done("done", timed=True)
     console.warn("warn")
-    captured = capsys.readouterr()
-    text = captured.out + captured.err
+    legacy.flush()
+
+    text = legacy.buffer.getvalue().decode("cp437")
     assert all(ord(ch) < 128 for ch in text), text
+    assert "Loading the model ..." in text
+
+
+def test_a_stream_that_can_encode_them_gets_the_icons():
+    import io
+
+    modern = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", newline="")
+    console = Console(stream=modern)
+    assert console.supports_icons is True
+    console.step("Loading the model", "model")
+    modern.flush()
+    assert ICONS["model"][0] in modern.buffer.getvalue().decode("utf-8")
+
+
+def test_every_icon_declares_an_ascii_stand_in():
+    """A missing stand-in is invisible until someone redirects the output."""
+    for name, (fancy, plain) in ICONS.items():
+        assert fancy, name
+        assert plain, f"{name} has no ASCII stand-in"
+        assert all(ord(ch) < 128 for ch in plain), name

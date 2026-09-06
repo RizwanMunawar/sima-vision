@@ -122,6 +122,177 @@ class ProfileWindow:
         self.reset()
 
 
+class SourceTiming:
+    """What the frame timestamps say, as opposed to what the SPS claims.
+
+    The recording is written at one constant rate, chosen before a single frame
+    has arrived: ``video_fps``, or the SPS rate, or 25. Nothing afterwards ever
+    checks that guess against the frames themselves, and both ways of being
+    wrong look the same in a player -- like a bad recording.
+
+    * A rate that does not match the source plays the whole clip at the wrong
+      speed. The motion is smooth, it is just too fast or too slow.
+    * Timestamps that go backwards mean frames are arriving in decode order
+      rather than presentation order, which is what a stream with B-frames does
+      when nothing reorders it. Written in arrival order, motion jerks back and
+      forth a frame at a time.
+
+    Attributes:
+        frames: Frames that carried a usable timestamp.
+        out_of_order: Frames whose timestamp went backwards.
+    """
+
+    def __init__(self) -> None:
+        self.pulled = 0
+        self.frames = 0
+        self.out_of_order = 0
+        self.first_ns = -1
+        self.last_ns = -1
+        self.previous_ns = -1
+        self.first_id = -1
+        self.last_id = -1
+        self._missing = 0
+        self._pulled_before = 0
+        self._span_ns = 0
+        self._intervals = 0
+        self._frames_before = 0
+
+    def add(self, stamp: FrameStamp) -> None:
+        self.pulled += 1
+
+        # Frame ids, when the source sets them, catch the failure timestamps
+        # cannot: frames that never arrived. Ids running 1, 3, 5 mean half the
+        # clip was dropped somewhere below this app, and a recording written
+        # from what did arrive holds every other frame -- so it is half as long
+        # as the clip and plays twice as fast, which is not a rate problem and
+        # no rate setting fixes it.
+        if stamp.frame_id >= 0:
+            if self.first_id < 0:
+                self.first_id = stamp.frame_id
+            self.last_id = max(self.last_id, stamp.frame_id)
+
+        pts = stamp.pts_ns
+        if pts < 0:                      # a source that stamps nothing
+            return
+        self.frames += 1
+        if self.first_ns < 0:
+            self.first_ns = pts
+        if self.previous_ns >= 0 and pts < self.previous_ns:
+            self.out_of_order += 1
+        self.previous_ns = pts
+        self.last_ns = max(self.last_ns, pts)
+
+    def restart(self) -> None:
+        """Begin a new piece of a cut-up clip.
+
+        Frame ids and timestamps both start again at each piece, so the gap
+        check has to forget the last one or it reads the restart as the whole
+        clip going missing. The counts carry on: they describe the recording,
+        which spans every piece.
+        """
+        self._missing = self.missing()
+        self._pulled_before = self.pulled
+        self._span_ns += max(0, self.last_ns - self.first_ns)
+        self._intervals += max(0, self.frames - self._frames_before - 1)
+        self._frames_before = self.frames
+        self.first_id = -1
+        self.last_id = -1
+        self.first_ns = -1
+        self.last_ns = -1
+        self.previous_ns = -1
+
+    def missing(self) -> int:
+        """Frames the ids say existed but that never reached the pull loop."""
+        if self.first_id < 0 or self.last_id <= self.first_id:
+            return self._missing
+        seen = self.pulled - self._pulled_before
+        return self._missing + max(0, (self.last_id - self.first_id + 1) - seen)
+
+    def fps(self) -> float:
+        """Frame rate implied by the timestamps, or 0.0 when they cannot say.
+
+        Summed over the pieces rather than measured end to end: each piece
+        stamps from zero again, so first-to-last across a cut-up clip spans
+        nothing meaningful.
+        """
+        span = self._span_ns + max(0, self.last_ns - self.first_ns)
+        intervals = self._intervals + max(0, self.frames - self._frames_before - 1)
+        if intervals < 1 or span <= 0:
+            return 0.0
+        return intervals * 1_000_000_000.0 / span
+
+
+def timing_report(cfg, pipeline: Pipeline, timing: SourceTiming) -> list[str]:
+    """Lines about playback, and only when there is something wrong with it."""
+    lines: list[str] = []
+    if pipeline.writer is None or not pipeline.writer_frames:
+        return lines
+
+    missing = timing.missing()
+    if missing:
+        span = timing.last_id - timing.first_id + 1
+        lines.append(
+            f"playback: the source numbered {span} frames but only {timing.pulled}"
+            f" arrived, so {missing} were dropped below this app.\n"
+            f"  The recording holds every frame it was given, so it covers"
+            f" {timing.pulled / span:.0%} of the clip and plays {span / timing.pulled:.2f}x"
+            " too fast.\n"
+            "  No frame rate setting fixes that: the frames are not there to slow down."
+        )
+
+    if timing.out_of_order:
+        lines.append(
+            f"playback: {timing.out_of_order} frame(s) arrived with a timestamp"
+            " earlier than the one before, so the source is handing over\n"
+            "  decode order, not presentation order. This clip has B-frames\n"
+            "  and nothing is reordering them. The recording is written in\n"
+            "  arrival order, so motion will jerk back and forth a frame at a time."
+        )
+
+    measured = timing.fps()
+    written = cfg.video_fps or pipeline.fps or 25
+    # 2% covers rounding an SPS rate like 24000/1001 to 24, which is right.
+    if measured and abs(measured - written) / written > 0.02:
+        lines.append(
+            f"playback: the recording is written at {written} fps but the frame"
+            f" timestamps say the source is {measured:.2f} fps, so it plays"
+            f" {written / measured:.2f}x too fast.\n"
+            f"  Re-run with --video-fps {round(measured)} to match the source."
+        )
+
+    # Never silently blind. With neither ids nor timestamps there is no way to
+    # tell a complete recording from one holding every other frame, and saying
+    # so beats saying nothing at all.
+    if not timing.frames and timing.first_id < 0:
+        lines.append(
+            "playback: the source set neither timestamps nor frame ids, so\n"
+            "  nothing here can confirm the recording runs at the right speed\n"
+            "  or holds every frame. Compare its length against the clip by hand."
+        )
+    return lines
+
+    if timing.out_of_order:
+        lines.append(
+            f"playback: {timing.out_of_order} frame(s) arrived with a timestamp"
+            " earlier than the one before, so the source is handing over\n"
+            "  decode order, not presentation order. This clip has B-frames\n"
+            "  and nothing is reordering them. The recording is written in\n"
+            "  arrival order, so motion will jerk back and forth a frame at a time."
+        )
+
+    measured = timing.fps()
+    written = cfg.video_fps or pipeline.fps or 25
+    # 2% covers rounding an SPS rate like 24000/1001 to 24, which is right.
+    if measured and abs(measured - written) / written > 0.02:
+        lines.append(
+            f"playback: the recording is written at {written} fps but the frame"
+            f" timestamps say the source is {measured:.2f} fps, so it plays"
+            f" {written / measured:.2f}x too fast.\n"
+            f"  Re-run with --video-fps {round(measured)} to match the source."
+        )
+    return lines
+
+
 class TaskRuntime:
     """What the pull loop needs from a task.
 
@@ -169,141 +340,164 @@ class TaskRuntime:
         return []
 
 
+def sink_depth_for(cfg, pipeline: Pipeline) -> int:
+    """How many finished frames may pile up waiting for the sinks.
+
+    The sinks do not have to keep up. They only have to stay out of the pull
+    loop's way, and those are very different requirements.
+
+    Software-encoding 1080p costs several times the frame interval on this
+    board -- a measured 117 ms against 42 ms -- so a bounded queue fills and
+    then ``submit`` parks the loop. That pause is the whole problem: a loop
+    that is not pulling lets decoded frames pile up against a pool of eight,
+    the decoder starves, and it does not come back. Runs died after
+    ``24 + sink_queue_depth`` frames, which is how this was traced: a depth of
+    4 stopped at 28 and a depth of 12 stopped at 36, on the same clip.
+
+    A sink job is plain numpy in host memory and holds no decoder buffer, so
+    the fix is to let the backlog grow rather than let the loop wait. For a
+    clip of known length that is bounded work: the loop drains the source in
+    seconds, the sink thread finishes afterwards, and ``run_pipeline`` already
+    joins it before anything reads ``writer_frames``. Memory is the only cost,
+    and ``sink_queue_mb`` is the budget for it.
+
+    A live source has no length, so no bound, and keeps the floor.
+    """
+    depth = cfg.sink_queue_depth
+    frame_bytes = pipeline.frame_w * pipeline.frame_h * 3
+    if not (cfg.sink_queue_mb and pipeline.source_frames and frame_bytes):
+        return depth
+    affordable = (cfg.sink_queue_mb << 20) // frame_bytes
+    return max(depth, min(pipeline.source_frames, affordable))
+
+
+def stall_attempts(pipeline: Pipeline, processed: int) -> int:
+    """How hard to fight a silent source, given what is known about the clip.
+
+    The clip's length is counted before the run starts, so silence is not
+    always the same question:
+
+    * **Every frame arrived.** This is the end of the file, not a stall. The
+      old code still drained and waited a full ``pull_timeout_ms`` here, so a
+      perfectly healthy run ended with a scary warning and twenty idle seconds.
+    * **Anything else.** One retry, which is what tells a starved pool from
+      a finished clip.
+
+    There was briefly a larger budget for a clip with frames demonstrably
+    left, on the theory that draining the sink queue releases the stall.
+    Four runs on a DevKit said otherwise -- ``recovered=0`` every time -- so
+    the extra attempts bought nothing and cost a ``pull_timeout_ms`` each.
+    The stall that was really happening is fixed in :func:`sink_depth_for`
+    instead, by not letting the pull loop park in the first place.
+    """
+    total = pipeline.source_frames
+    if total and processed >= total:
+        return 0
+    return 1
+
+
 def pull_frame(pipeline: Pipeline, cfg, sinks: SinkWorker, label: str, processed: int):
     """Pull one joined sample, flushing our own backlog before giving up.
 
     A starved decoder and a finished clip look identical from here: both are
-    silence. So on the first timeout, hand back everything the app is still
-    holding -- the sink queue is several decoded frames deep -- and ask again. A
-    pool that refills answers straight away; a clip that ended stays quiet.
+    silence. So on a timeout, hand back everything the app is still holding --
+    the sink queue is several decoded frames deep -- and ask again. A pool that
+    refills answers straight away; a clip that ended stays quiet.
+
+    Draining is the whole point of the retry, not politeness. The stall is the
+    pull loop parked in ``submit`` while decoded frames piled up between the
+    decoder and this app; emptying the sink queue is what lets the pool turn
+    over again. How many times that is worth trying is :func:`stall_attempts`.
 
     Args:
         pipeline: Live pipeline.
         cfg: Application configuration, for ``pull_timeout_ms``.
-        sinks: Sink worker to drain before the retry.
+        sinks: Sink worker to drain before each retry.
         label: Public output to pull.
-        processed: Frames processed so far, for the message only.
+        processed: Frames processed so far.
 
     Returns:
         A ``(sample, timed_out, recovered)`` triple. ``sample`` is None only
-        when both attempts came back empty.
+        once every attempt has come back empty.
     """
     sample = pipeline.run.pull(label, cfg.pull_timeout_ms)
     if sample is not None:
         return sample, False, False
 
-    console.warn(
-        f"timed out waiting for results after {processed} frames; "
-        "flushing the sink queue and retrying once"
-    )
-    sinks.drain()
-    sample = pipeline.run.pull(label, cfg.pull_timeout_ms)
-    if sample is None:
-        return None, True, False
+    attempts = stall_attempts(pipeline, processed)
+    if not attempts:
+        # The clip delivered every frame it has. Nothing is wrong, so nothing
+        # is warned about and nothing is waited for.
+        return None, False, False
 
-    console.warn(
-        "the source recovered once the backlog was flushed. That was "
-        "back-pressure from this app rather than the end of the clip; lower "
-        "runtime.sink_queue_depth if it keeps happening."
-    )
-    return sample, True, True
+    for attempt in range(1, attempts + 1):
+        console.warn(
+            f"timed out waiting for results after {processed} frames; flushing "
+            f"the sink queue and retrying ({attempt} of {attempts})"
+        )
+        sinks.drain()
+        sample = pipeline.run.pull(label, cfg.pull_timeout_ms)
+        if sample is not None:
+            console.warn(
+                "the source recovered once the backlog was flushed. That was "
+                "back-pressure from this app rather than the end of the clip; "
+                "raise runtime.sink_queue_depth if it keeps happening, so the "
+                "pull loop keeps draining the decoder instead of parking."
+            )
+            return sample, True, True
+    return None, True, False
 
 
-def source_stopped_message(cfg, pipeline: Pipeline, processed: int,
-                           sink_ms: float = 0.0) -> str:
+def source_stopped_message(cfg, pipeline: Pipeline, processed: int) -> str:
     """Explain a source that went quiet, ruling out what the frame count rules out.
 
     The clip's length is known before the run starts, so "it just ended" is
     either the whole answer or not on the list at all. Saying which turns a
     short recording from something to be interpreted into something decided.
+
+    There used to be a ranked list of causes under this, written while the
+    stall was still a mystery. It is not one any more: the decoder stops around
+    195 frames whatever the sinks, the pool or the GOP are doing, and
+    :mod:`sima_vision.segments` handles it by cutting the clip. Guesses that
+    outlive the thing they were guessing at only send people down the wrong
+    path, so they are gone.
     """
     total = pipeline.source_frames
-    head = (
-        f"source produced nothing for {cfg.pull_timeout_ms} ms twice in a row after "
-        f"{processed} frames"
-    )
     if total and processed >= total:
+        # Not a timeout report at all: every frame arrived, so the silence that
+        # brought us here is just the end of the file.
         return (
-            f"{head}, which is the whole clip ({total} frames). Nothing is wrong: "
-            "the run is complete."
+            f"the source ended after {processed} frames, which is the whole clip "
+            f"({total} frames). Nothing is wrong: the run is complete."
         )
 
+    tries = stall_attempts(pipeline, processed) + 1
+    head = (
+        f"source produced nothing for {cfg.pull_timeout_ms} ms "
+        f"{tries} times in a row after {processed} frames"
+    )
     if total:
-        head += (
-            f", {processed / total:.0%} of the way through a {total} frame clip. "
-            "The source stalled; it did not end."
+        return (
+            f"{head}, {processed / total:.0%} of the way through a {total} frame "
+            "clip. The source stalled; it did not end."
         )
-    else:
-        head += ". If that is far short of the clip, the source stalled rather than ended."
-
-    causes = stall_causes(cfg, pipeline, sink_ms)
-    listed = "\n".join(
-        f"  {n}. {cause}" for n, cause in enumerate(causes, 1)
-    )
     return (
-        f"{head}\nIn order of likelihood:\n{listed}\n"
-        "Run again with --no-save --no-video to tell the graph apart from how much\n"
-        "work this app does per frame: the same stall means the graph, a complete\n"
-        "run means the sinks."
+        f"{head}. If that is far short of the clip, the source stalled rather "
+        "than ended."
     )
-
-
-def stall_causes(cfg, pipeline: Pipeline, sink_ms: float) -> list[str]:
-    """Why the source stopped, most likely first.
-
-    Ordered by what this run actually measured rather than by what is usually
-    true. The sink cost is known -- ``SinkWorker`` times every ``submit`` that
-    had to wait -- and when it dwarfs the frame interval it is not a hypothesis,
-    it is the answer, so it goes first and the generic advice goes below it.
-
-    Causes that cannot apply are left out entirely. Telling someone their
-    Insight feed may have wedged the codec daemon when they never turned Insight
-    on is one more thing to rule out by hand.
-    """
-    interval = 1000.0 / (pipeline.fps or 25)
-    causes: list[str] = []
-
-    if sink_ms > interval:
-        causes.append(
-            f"the sinks cannot keep up. They held the pull loop {sink_ms:.0f} ms per\n"
-            f"     frame against a {interval:.0f} ms frame interval, so the loop was not\n"
-            "     asking for frames and decoded ones piled up between the decoder and\n"
-            "     this app. Drawing and encoding 1080p in software on the board's CPU\n"
-            "     is the usual reason. --no-video is the cheapest thing to try, and\n"
-            "     --sink-queue-depth buys the loop room to keep draining the decoder.\n"
-            "     Not --queue-depth: that one deepens the runtime's own queues, which\n"
-            "     parks more decoded frames and makes this worse."
-        )
-
-    # Only worth suggesting when there is somewhere to lower it to. The floor is
-    # 1 and so is the default, so on a config nobody has touched this used to
-    # read as "turn down the thing that is already all the way down".
-    room = (
-        f"     Then lower runtime.output_buffers, currently {cfg.output_buffers}, "
-        f"which costs\n     two buffers for every one you take off it."
-        if cfg.output_buffers > 1
-        else "     runtime.output_buffers is already 1, its minimum, so the slack has\n"
-             "     to come from somewhere else."
-    )
-    causes.append(
-        "the hardware decoder ran out of buffers. Its pool is small (the boot log\n"
-        "     prints BufferNum), and every element between it and the source appsink\n"
-        "     can park one. Count the queues in the first pipeline printed above:\n"
-        "     their max-buffers plus the appsink's must stay under BufferNum.\n"
-        f"{room}"
-    )
-
-    if cfg.insight_enable:
-        causes.append(
-            "output.insight.enable is on and its encoder shares the codec daemon\n"
-            "     with the decoder, so it can wedge it. Try again without --insight."
-        )
-    return causes
 
 
 def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
-                   profile: ProfileWindow, task: TaskRuntime) -> tuple[int, int, int]:
-    """The pull loop. Returns ``(processed, timeouts, recovered)``."""
+                   profile: ProfileWindow, task: TaskRuntime,
+                   timing: SourceTiming, already: int = 0) -> tuple[int, int, int]:
+    """The pull loop. Returns ``(processed, timeouts, recovered)``.
+
+    Args:
+        already: Frames processed by earlier pieces of a cut-up clip. Frame
+            numbers carry on from there, because they name the stills: two
+            pieces both numbering from one would write frame_000001 twice and
+            the second would overwrite the first.
+    """
     processed = 0
     timeouts = 0
     recovered = 0
@@ -311,7 +505,7 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
     heartbeat_count = 0
     live_fps = float(pipeline.fps or 25)   # HUD value, refreshed each heartbeat
 
-    while not stopper.stop and (cfg.frames <= 0 or processed < cfg.frames):
+    while not stopper.stop and (cfg.frames <= 0 or already + processed < cfg.frames):
         pull_start = time_ms()
         sample, timed_out, came_back = pull_frame(
             pipeline, cfg, sinks, task.output_label, processed
@@ -322,22 +516,22 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
 
         if sample is None:
             if cfg.source_type == "video":
-                console.report(
-                    source_stopped_message(
-                        cfg, pipeline, processed,
-                        sinks.blocked_ms / processed if processed else 0.0,
-                    )
-                )
+                console.report(source_stopped_message(cfg, pipeline, processed))
                 break
             continue
 
         stamp = FrameStamp.of(sample)
-        frame, results, stage_ms = task.decode(pipeline, cfg, sample, processed + 1)
+        timing.add(stamp)
+        frame, results, stage_ms = task.decode(
+            pipeline, cfg, sample, already + processed + 1
+        )
         sample = None
         decode_end = time_ms()
 
         processed += 1
-        sinks.submit(SinkJob(processed, stamp, frame, results, live_fps))
+        sinks.submit(
+            SinkJob(already + processed, stamp, frame, results, live_fps)
+        )
         sink_end = time_ms()
 
         count = len(results)
@@ -356,7 +550,7 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
             rate = HEARTBEAT_EVERY * 1000.0 / elapsed if elapsed > 0 else 0.0
             live_fps = rate or live_fps
             console.write(
-                f"  {processed:>6}  {rate:.1f} fps, "
+                f"  {already + processed:>6}  {rate:.1f} fps, "
                 f"{heartbeat_count / HEARTBEAT_EVERY:.1f} {task.unit}/frame avg"
             )
             heartbeat_start = time_ms()
@@ -414,16 +608,44 @@ def report_recording(cfg, pipeline: Pipeline, timeouts: int) -> None:
     console.warn(f"the recording is incomplete: {missing}.\n{listed}")
 
 
-def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -> int:
-    """Run one task to completion and print the closing report."""
+def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime,
+                 rebuild=None) -> int:
+    """Run one task to completion and print the closing report.
+
+    Args:
+        pipeline: Live pipeline, already built for the first piece.
+        cfg: Application configuration.
+        stopper: Cooperative stop flag.
+        task: The pull-loop implementation.
+        rebuild: Optional ``() -> bool`` that points ``pipeline.run`` at the
+            next piece of a cut-up clip and reports whether there was one. The
+            recording, the sinks and the model are untouched across the call,
+            so the pieces land in one continuous video. None runs the source
+            once, which is every case but a clip too long for one decode.
+
+    Returns:
+        Frames processed across every piece.
+    """
     profile = ProfileWindow(cfg.profile, cfg.profile_interval, task.stage, task.unit)
     sinks = SinkWorker(
-        cfg, pipeline, cfg.sink_queue_depth, task.render, task.stream, task.metadata
+        cfg, pipeline, sink_depth_for(cfg, pipeline), task.render, task.stream,
+        task.metadata,
     )
+    timing = SourceTiming()
+    processed = timeouts = recovered = 0
     try:
-        processed, timeouts, recovered = consume_frames(
-            pipeline, cfg, stopper, sinks, profile, task
-        )
+        while True:
+            done, timed_out, came_back = consume_frames(
+                pipeline, cfg, stopper, sinks, profile, task, timing, processed
+            )
+            processed += done
+            timeouts += timed_out
+            recovered += came_back
+            if stopper.stop or rebuild is None or not rebuild():
+                break
+            # Each piece numbers its frames from zero again, so the gap check
+            # would read the restart as thousands of missing frames.
+            timing.restart()
     finally:
         # Ordered before anything that reads writer_frames: frames may still be
         # queued, and they belong in the recording. close() re-raises whatever
@@ -446,6 +668,8 @@ def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime) -
         )
 
     report_recording(cfg, pipeline, timeouts)
+    for line in timing_report(cfg, pipeline, timing):
+        console.warn(line)
 
     if pipeline.metadata_sender is not None:
         stats = pipeline.metadata_sender.stats()

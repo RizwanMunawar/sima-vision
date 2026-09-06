@@ -170,7 +170,7 @@ def test_no_flags_at_all_still_validates(capsys):
     """Neither --model nor --source is required: both default into assets/."""
     assert main(["detect", "--no-config", "--validate"]) == 0
     out = capsys.readouterr().out
-    assert "assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz" in out
+    assert "assets/models/yolo26n-det-bf16-mla_tess-b1.tar.gz" in out
     assert "assets/videos/people-walking-outside-mall.h264" in out
 
 

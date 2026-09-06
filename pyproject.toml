@@ -73,8 +73,8 @@ Repository = "https://github.com/RizwanMunawar/sima-projects"
 Issues = "https://github.com/RizwanMunawar/sima-projects/issues"
 
 [project.scripts]
-# NOT `sima-cli`: that name belongs to SiMa.ai's own CLI, which the setup guide
-# installs to pair the board. Shadowing it would break the DevKit workflow.
+# NOT `sima-cli`: that name belongs to SiMa.ai's own CLI, which installs the
+# Neat core and pairs the board. Shadowing it would break the DevKit workflow.
 sima-vision = "sima_vision.cli:main"
 
 # Another distribution adds a subcommand by advertising one of these; see

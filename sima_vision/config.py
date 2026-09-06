@@ -301,8 +301,12 @@ class DrawConfig:
         banner_bg_color: Strip fill, BGR.
         banner_text_color: Strip text, BGR.
         hud_text_color: Frame-rate badge text colour, BGR.
-        hud_bg_color: Frame-rate badge fill colour, BGR.
-        hud_text_scale: Badge font scale. 0 follows ``text_scale``.
+        hud_bg_color: Frame-rate badge fill colour, BGR. Purple by default,
+            which reads as an overlay rather than as part of the footage the
+            way a black block did.
+        hud_text_scale: Badge font scale. 0 follows ``text_scale``. Set a
+            little above it by default: the badge is glanced at while the
+            video plays, not read, so it wants to be larger than a caption.
         hud_text_thickness: Badge stroke weight. 0 follows ``text_thickness``.
         hud_padding: Gap between badge text and badge edge, on every side. 0
             follows ``text_padding``. This is what sets the badge size when no
@@ -347,8 +351,8 @@ class DrawConfig:
     banner_text_color: tuple[int, int, int] = (255, 255, 255)
 
     hud_text_color: tuple[int, int, int] = (255, 255, 255)
-    hud_bg_color: tuple[int, int, int] = (0, 0, 0)
-    hud_text_scale: float = 0.0
+    hud_bg_color: tuple[int, int, int] = (128, 0, 128)
+    hud_text_scale: float = 1.3
     hud_text_thickness: int = 0
     hud_padding: int = 0
     hud_padding_x: int = 0
@@ -501,6 +505,40 @@ class BaseConfig:
             buffer, so depth here is the cheap kind: it lets the pull loop keep
             draining the source instead of blocking on a slow recording. About
             6 MB per slot at 1080p.
+
+            This is the floor. For a file source ``sink_queue_mb`` raises it
+            towards holding the whole clip; see :func:`sink_depth_for`.
+        segment_frames: Frames per piece when a clip is too long for one
+            decode. The SiMa decoder stops part-way through a long clip -- 190
+            to 202 frames of a 379 frame one, whatever the sinks, the pool or
+            the container -- and building the decode again gets another run at
+            it, so a long clip is cut at its keyframes and the pieces are
+            decoded one after another into a single recording. 0 disables it
+            and runs the clip whole. A clip whose keyframes are further apart
+            than this cannot be cut usefully and is run whole regardless.
+        decoder_buffers: Buffers to ask the hardware decoder for, through
+            ``SimaDecodeOptions.num_buffers``. 0 sizes it from the stream: the
+            reference frames its SPS declares, the picture being decoded, what
+            the source appsink parks, and a little slack. A positive number
+            pins it. A negative number leaves pyneat's own -1 in place, which
+            is what the app did before and which lets the daemon pick 8 for
+            1080p regardless of what the stream needs.
+        decoder_pool: Decoded frames the hardware decoder's pool holds. The
+            boot log prints the real number as ``BufferNum=`` when the decoder
+            finds the stream's resolution, and it is per-resolution, so 8 is
+            what a 1080p run reports rather than a constant. Used only to say
+            whether a stream's own buffering will fit; set it to what your
+            board prints if it differs.
+        sink_queue_mb: Host memory the sink backlog may use, for a *file*
+            source only. The recording is the slow part -- software-encoding
+            1080p costs several times the frame interval on this board -- and
+            the pull loop must not wait for it, because a loop that is not
+            pulling is a decoder that starves and never comes back. So for a
+            clip of known length the queue grows to hold the whole thing: the
+            loop drains the source at full speed in seconds and the sink thread
+            finishes the backlog afterwards, which the run already waits for.
+            Costs about 6 MB a frame at 1080p, capped by the clip's own length.
+            0 disables the growth and leaves ``sink_queue_depth`` alone.
         output_buffers: Buffers each public output may hold. Every one of them
             is a frame checked out of the hardware decoder's pool, that pool is
             small (the boot log prints ``BufferNum=8``), and there are two
@@ -560,7 +598,11 @@ class BaseConfig:
     frames: int = 0
     pull_timeout_ms: int = 20000
     queue_depth: int = 1
-    sink_queue_depth: int = 4
+    sink_queue_depth: int = 12
+    sink_queue_mb: int = 1024
+    decoder_pool: int = 8
+    decoder_buffers: int = 0
+    segment_frames: int = 150
     output_buffers: int = 1
     run_preset: str = "auto"
     overflow_policy: str = "auto"
@@ -688,7 +730,11 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         frames=_int(runtime, "frames", 0),
         pull_timeout_ms=_int(runtime, "pull_timeout_ms", 20000),
         queue_depth=_int(runtime, "queue_depth", 1),
-        sink_queue_depth=_int(runtime, "sink_queue_depth", 4),
+        sink_queue_depth=_int(runtime, "sink_queue_depth", 12),
+        sink_queue_mb=_int(runtime, "sink_queue_mb", 1024),
+        decoder_pool=_int(runtime, "decoder_pool", 8),
+        decoder_buffers=_int(runtime, "decoder_buffers", 0),
+        segment_frames=_int(runtime, "segment_frames", 150),
         output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", defaults.run_preset).lower(),
         overflow_policy=_str(runtime, "overflow_policy", defaults.overflow_policy).lower(),
@@ -767,6 +813,12 @@ def validate_base(cfg: BaseConfig) -> None:
         raise ValueError("runtime.queue_depth must be >= 1")
     if cfg.sink_queue_depth < 1:
         raise ValueError("runtime.sink_queue_depth must be >= 1")
+    if cfg.sink_queue_mb < 0:
+        raise ValueError("runtime.sink_queue_mb must be >= 0")
+    if cfg.decoder_pool < 1:
+        raise ValueError("runtime.decoder_pool must be >= 1")
+    if cfg.segment_frames < 0:
+        raise ValueError("runtime.segment_frames must be >= 0")
     if cfg.pull_timeout_ms <= 0:
         raise ValueError("runtime.pull_timeout_ms must be > 0")
     if cfg.profile_interval <= 0:
@@ -805,10 +857,6 @@ def validate_base(cfg: BaseConfig) -> None:
         )
     if not 0.0 <= cfg.draw.mask_alpha <= 1.0:
         raise ValueError("visualization.mask_alpha must be in [0.0, 1.0]")
-    if not (cfg.save_enable or cfg.insight_enable or cfg.video_enable):
-        raise ValueError(
-            "enable at least one of output.save, output.video or output.insight"
-        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

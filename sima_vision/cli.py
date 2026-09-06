@@ -34,24 +34,34 @@ from __future__ import annotations
 
 import argparse
 import os
+import tarfile
 from pathlib import Path
 
 from . import __version__
+from .assets import default_model_path, ensure_model, models_dir
 from .bootstrap import detect_environment, ensure_runtime
-from .console import console
+from .console import console, human_bytes
 from .devkit import DEVKIT_ENV, run_pull, run_push
+from .export import (
+    DEFAULT_IMGSZ,
+    DEFAULT_OPSET,
+    compile_recipe,
+    export_onnx,
+    model_sdk_present,
+    next_steps,
+    run_recipe,
+)
 from .neat import describe_preprocess
+from .pack import complete_pack
 from .runloop import Stopper
 from .runtime import FAMILY_DECODE_TOKENS
 from .tasks import TASKS
-
-#: environment, pyneat, imaging, assets, source, model, pipeline.
-RUN_STEPS = 7
 
 EPILOG = """\
 examples:
   sima-vision detect                       the sample clip and model, fetched for you
   sima-vision detect  --source clip.h264 --model yolo26m-det.tar.gz
+  sima-vision detect  --source clip.mp4                    reframed for you, once
   sima-vision detect  --source https://example.com/clip.h264
   sima-vision segment --blur --keep-classes person
   sima-vision fall    --source rtsp://cam/live --alert-to ops@example.com
@@ -143,7 +153,34 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         "--sink-queue-depth", dest="runtime.sink_queue_depth", type=int, metavar="N",
         help="How many finished frames may wait for the recorder. Costs host "
              "memory only, about 6 MB a slot at 1080p, and lets the pull loop "
-             "keep draining the decoder. Default 4.",
+             "keep draining the decoder. Raise it if a run stalls. Default 12.",
+    )
+    run.add_argument(
+        "--segment-frames", dest="runtime.segment_frames", type=int, metavar="N",
+        help="Frames per piece when a clip is too long for one decode. The "
+             "decoder stops around 195 frames, so a longer clip is cut at its "
+             "keyframes and decoded piece by piece into one recording. "
+             "0 runs the clip whole. Default 150.",
+    )
+    run.add_argument(
+        "--output-buffers", dest="runtime.output_buffers", type=int, metavar="N",
+        help="Buffers each public output may hold. Default 1. Every one is a "
+             "frame checked out of the decoder's pool, so raising it used to "
+             "make a starved run worse -- but --decoder-buffers can now pay "
+             "for it. Worth a 2 if frames are being dropped at the join.",
+    )
+    run.add_argument(
+        "--decoder-buffers", dest="runtime.decoder_buffers", type=int, metavar="N",
+        help="Buffers to ask the hardware decoder for. Default 0, which sizes "
+             "it from the stream's own reference frames -- the fix for a run "
+             "that stops part-way through. Negative leaves pyneat to pick.",
+    )
+    run.add_argument(
+        "--sink-queue-mb", dest="runtime.sink_queue_mb", type=int, metavar="MB",
+        help="Host memory the sink backlog may use on a file source. The queue "
+             "grows towards holding the whole clip so the pull loop never waits "
+             "for the recorder, which is what starves the decoder. 0 disables "
+             "the growth. Default 1024.",
     )
     run.add_argument(
         "--profile", dest="runtime.profile", action="store_const", const=True,
@@ -239,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
         add_task_arguments(sub, task)
         sub.set_defaults(_task=task_cls)
 
+    add_compile_parser(subparsers)
     add_push_parser(subparsers)
     add_pull_parser(subparsers)
     return parser
@@ -250,6 +288,47 @@ def add_host_argument(parser: argparse.ArgumentParser) -> None:
         "--host", "-H", metavar="USER@ADDR",
         help=f"The DevKit, as ssh takes it. Defaults to ${DEVKIT_ENV} so you "
              f"only say it once.",
+    )
+
+
+def add_compile_parser(subparsers) -> None:
+    """``compile`` -- a trained .pt towards a pack the board can run."""
+    parser = subparsers.add_parser(
+        "compile",
+        help="Turn a trained YOLO26 .pt into a DevKit model pack",
+        description=(
+            "Export a trained YOLO26 .pt to the raw-head ONNX the board's box "
+            "decoder reads, then compile it with the SiMa Model SDK if this "
+            "machine has one. Run it on your PC: exporting needs torch, and "
+            "compiling needs the Palette container."
+        ),
+        epilog=(
+            "examples:\n"
+            "  sima-vision compile best.pt\n"
+            "  sima-vision compile best.pt --imgsz 512 --out build/\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "weights",
+        help="Trained YOLO26 .pt. Detection and segmentation both compile; "
+             "a segmentation model keeps its mask coefficients.",
+    )
+    parser.add_argument(
+        "--out", metavar="DIR", default="build",
+        help="Where the ONNX and the recipe are written. Default build/.",
+    )
+    parser.add_argument(
+        "--imgsz", type=int, default=DEFAULT_IMGSZ, metavar="N",
+        help=f"Square input side. Default {DEFAULT_IMGSZ}, which is what the "
+             "published packs use.",
+    )
+    parser.add_argument(
+        "--opset", type=int, default=DEFAULT_OPSET, metavar="N",
+        help=f"ONNX opset. Default {DEFAULT_OPSET}.",
+    )
+    parser.add_argument(
+        "--quiet", action="store_true", help="Warnings and errors only.",
     )
 
 
@@ -317,6 +396,121 @@ def collect_overrides(args: argparse.Namespace) -> dict:
     }
 
 
+def run_compile(args) -> int:
+    """``compile`` -- export, then compile if the Model SDK is here."""
+    console.banner(f"sima-vision {__version__}", "compile")
+    weights = Path(args.weights)
+    if not weights.is_file():
+        raise SystemExit(f"no such file: {weights}")
+
+    out_dir = Path(args.out)
+    onnx_path = out_dir / f"{weights.stem}-raw.onnx"
+    with console.step(f"Exporting {weights.name} to ONNX", "export") as step:
+        step.note(
+            "the board decodes boxes itself, so the head's raw tensors are exported\n"
+            "rather than ultralytics' assembled [1, 84, 8400] output"
+        )
+        shapes = export_onnx(weights, onnx_path, args.imgsz, args.opset)
+        for name, shape in shapes.items():
+            step.detail(f"{name:<16} {tuple(shape)}")
+        step.done(f"{onnx_path} ({human_bytes(onnx_path.stat().st_size)})")
+
+    with console.step("Compiling the DevKit pack", "compile") as step:
+        # The two halves fail for different reasons and want different answers,
+        # so they are asked separately. Collapsed into one branch, a machine
+        # that was simply missing a recipe read as one that could never compile.
+        if not model_sdk_present():
+            recipe_path = write_recipe(out_dir, step)
+            step.done("stopped at the ONNX: no `afe` module, so no Model SDK here")
+            console.warn(next_steps(onnx_path, recipe_path))
+            return 0
+
+        recipe_path = write_recipe(out_dir, step, fetch_if_missing=True)
+        if recipe_path is None:
+            step.done("stopped at the ONNX: no pack to take a compile recipe from")
+            console.warn(next_steps(onnx_path, None))
+            return 0
+
+        step.note("quantizing and tessellating. This takes a few minutes.")
+        pack = run_recipe(recipe_path, onnx_path, out_dir)
+        finish_pack(pack, step)
+        step.done(f"{pack} ({human_bytes(pack.stat().st_size)})")
+
+    console.report(f"run it with:  sima-vision detect --model {pack.name}")
+    console.report(f"send it over: sima-vision push {pack}")
+    return 0
+
+
+def reference_pack() -> Path | None:
+    """A published pack, to copy out of. Any of them will do.
+
+    Two things are taken from one: the compile recipe, and the pipeline files
+    that the Model SDK's own output does not carry. Both are the same in every
+    pack, so the first one on disk is as good as any.
+    """
+    packs = sorted(models_dir().glob("*.tar.gz"))
+    return packs[0] if packs else None
+
+
+def finish_pack(pack: Path, step) -> None:
+    """Add the pipeline files the board reads, when the compile left them out.
+
+    The Model SDK writes the ELF and the manifest. What the board's preprocess
+    planner looks for first is `pipeline_sequence.json` and the two plugin
+    configs beside it, and a pack without them fails on the board rather than
+    here, a minute into a run, with a message about a missing MLA stage.
+    """
+    reference = reference_pack()
+    if reference is None:
+        step.note("no published pack here to check this one against")
+        return
+    added = complete_pack(pack, reference)
+    if added:
+        step.detail(f"added {', '.join(added)} from {reference.name}")
+
+
+def write_recipe(out_dir: Path, step, fetch_if_missing: bool = False) -> Path | None:
+    """Copy a published pack's own compile script next to the ONNX.
+
+    Taken from a pack rather than written here, because the settings that
+    matter -- bfloat16, MSE calibration, the MLA tessellation layouts -- are
+    the ones SiMa actually shipped, and a paraphrase of them would drift.
+
+    Args:
+        out_dir: Where the recipe is written, beside the ONNX.
+        step: The console step to report under.
+        fetch_if_missing: Download a pack when there is none to read. Only the
+            caller that is about to compile asks for this: it is a 21 MB
+            download for a file inside it, which is worth it to finish the job
+            and not worth it on a machine that was going to stop anyway.
+    """
+    pack = reference_pack()
+    if pack is None and fetch_if_missing:
+        # Every pack carries the same recipe, so the smallest one will do.
+        step.detail("no pack here to take a recipe from, fetching the nano one")
+        try:
+            ensure_model(default_model_path("detect"), "detect", step)
+        except RuntimeError as exc:
+            step.note(str(exc))
+        pack = reference_pack()
+    if pack is None:
+        step.note(
+            "no model pack here to copy a recipe from. Any real run fetches one,\n"
+            "and the recipe comes inside it."
+        )
+        return None
+    try:
+        script = compile_recipe(pack)
+    except (RuntimeError, OSError, tarfile.TarError) as exc:
+        step.note(f"could not read a recipe from {pack.name}: {exc}")
+        return None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "compile_modelsdk.py"
+    path.write_text(script, encoding="utf-8")
+    step.detail(f"recipe from {pack.name} -> {path}")
+    return path
+
+
 def print_validation(task, cfg) -> None:
     """What ``--validate`` prints. Deliberately the same shape for every task."""
     console.banner(f"sima-vision {__version__}", f"{task.name} --validate")
@@ -361,9 +555,8 @@ def run_task(args) -> int:
     if early is not None:
         return early
 
-    console.plan(RUN_STEPS)
     console.banner(f"sima-vision {__version__}", task.name)
-    with console.step("environment", "checking this machine") as step:
+    with console.step("Checking the environment", "check") as step:
         env = detect_environment()
         step.done(env.summary())
     ensure_runtime(env)
@@ -398,6 +591,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command in TASKS:
             return run_task(args)
+        if args.command == "compile":
+            return run_compile(args)
         return run_devkit_command(args)
     except KeyboardInterrupt:
         return 130

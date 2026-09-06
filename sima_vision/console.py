@@ -1,18 +1,23 @@
 """What the user actually sees.
 
-Every command prints the same shape, because every command is doing the same
-kind of thing: a numbered list of steps, each one saying what it is about to do
-*before* it does it, and what came of it afterwards. Nothing waits in silence.
+A run narrates itself, one line per thing it is doing, in the order it does
+them::
 
-    sima-vision 0.1.0  detect
+    Checking environment ...
+      Modalix DevKit  aarch64  python 3.11.2
+    Loading the Neat runtime ...
+      pyneat 0.3.0
+    Loading the model ...
+      yolo26 -> YoloV26, 80 classes  (45.4s)
+    Processing video ...
 
-      [1/7] environment  checking this machine
-            -> Modalix DevKit  aarch64  python 3.11.2
-      [2/7] pyneat       locating the Neat runtime
-            -> 0.3.0  using pyneat from /home/sima/pyneat
-      ...
-      [7/7] pipeline     building the Neat graph
-            -> yolo_detector ready (3.1s)
+Each line opens with an icon where the terminal can render one. That is the
+whole reason :meth:`Console.icon` exists: Python picks an encoder for stdout the
+moment it is redirected, and on a Windows console that is often cp437, which has
+no emoji at all. Printing one there does not look wrong, it raises
+UnicodeEncodeError and takes the run down with it. So every icon is declared
+with an ASCII stand-in and the stream is asked, once, which of the two it can
+carry.
 
 Four channels, and which one a line goes to is a decision about the reader:
 
@@ -23,12 +28,6 @@ Four channels, and which one a line goes to is a decision about the reader:
 * :meth:`Console.warn` is something to act on, so it also survives, and stays
   on stdout in step order -- a warning read out of sequence is half a message.
 * :meth:`Console.error` is the only thing on stderr.
-
-Everything here is ASCII. Python picks an encoder for stdout the moment it is
-redirected, so one smart quote turns `sima-vision detect > log.txt` on a Windows
-console into a UnicodeEncodeError, and that is a crash in the logging taking a
-run with it. Colour is the one exception, and it only ever reaches a terminal
-that asked for it.
 """
 
 from __future__ import annotations
@@ -43,8 +42,27 @@ COLOR_ENV = "SIMA_VISION_COLOR"
 #: Set to anything non-empty to drop everything below WARN, as `--quiet` does.
 QUIET_ENV = "SIMA_VISION_QUIET"
 
-#: Width the step labels are padded to. Long enough for "environment".
-LABEL_WIDTH = 12
+#: How far a step's own lines are indented under it.
+BODY = "  "
+
+#: ``name -> (icon, ASCII stand-in)``. The stand-in is not a fallback nobody
+#: sees: a redirected run on Windows is cp437, and that is the common case for
+#: anyone piping output into a file to paste into an issue.
+ICONS: dict[str, tuple[str, str]] = {
+    "check": ("\U0001f50e", "*"),      # magnifying glass
+    "runtime": ("\U0001f9e9", "*"),    # puzzle piece
+    "imaging": ("\U0001f5bc", "*"),    # framed picture
+    "assets": ("\U0001f4e6", "*"),     # package
+    "video": ("\U0001f3ac", "*"),      # clapper board
+    "model": ("\U0001f9e0", "*"),      # brain
+    "build": ("\U00002699", "*"),      # gear
+    "run": ("\U000025b6", ">"),        # play
+    "export": ("\U0001f4e4", "*"),     # outbox
+    "compile": ("\U0001f527", "*"),    # wrench
+    "download": ("\U00002b07", "v"),   # down arrow
+    "ok": ("\U00002713", "ok"),        # check mark
+    "fail": ("\U00002717", "x"),       # ballot x
+}
 
 
 def _truthy(value: str) -> bool:
@@ -128,19 +146,22 @@ def human_time(seconds: float) -> str:
 
 
 class Step:
-    """One numbered line, plus anything it wants to say underneath.
+    """One line saying what is being done, and what came of it.
 
-    Entered as a context manager so the label appears *before* the slow part
-    runs and the outcome lands after it. A step that raises is marked failed on
-    the way out, so an exception never leaves an unfinished line as the last
-    thing on screen.
+    Entered as a context manager so the line appears *before* the slow part runs
+    and the outcome lands after it. A step that raises is marked failed on the
+    way out, so an exception never leaves an unfinished line as the last thing
+    on screen.
+
+    The outcome goes on a line of its own rather than rewriting the first one.
+    By the time a step finishes there may be output from pyneat or from pip
+    printed underneath it, and moving the cursor back over that would eat it.
     """
 
-    def __init__(self, console: Console, index: int, total: int | None, label: str) -> None:
+    def __init__(self, console: Console, message: str, icon: str = "") -> None:
         self.console = console
-        self.index = index
-        self.total = total
-        self.label = label
+        self.message = message
+        self.icon = icon
         self.started = time.perf_counter()
         self._closed = False
 
@@ -148,33 +169,25 @@ class Step:
     def elapsed(self) -> float:
         return time.perf_counter() - self.started
 
-    def _prefix(self) -> str:
-        counter = f"[{self.index}/{self.total}]" if self.total else f"[{self.index}]"
-        style = self.console.style
-        return f"  {style.paint(counter, style.dim)} {self.label:<{LABEL_WIDTH}}"
-
-    def begin(self, detail: str = "") -> Step:
-        """Print the label now, so a slow step is never a silent one."""
-        self.console.write(f"{self._prefix()} {detail}".rstrip())
+    def begin(self) -> Step:
+        """Print the line now, so a slow step is never a silent one."""
+        mark = self.console.icon(self.icon) if self.icon else ""
+        lead = f"{mark} " if mark else ""
+        self.console.write(f"{lead}{self.message} ...")
         return self
 
     def detail(self, text: str) -> None:
         """A continuation line, indented under the step."""
         for line in str(text).splitlines() or [""]:
-            self.console.write(f"        {line}")
+            self.console.write(f"{BODY}{line}")
 
     def note(self, text: str) -> None:
+        """The same, dimmed: true and worth having, but not worth reading."""
         style = self.console.style
         for line in str(text).splitlines() or [""]:
-            self.console.write(f"        {style.paint(line, style.dim)}")
+            self.console.write(f"{BODY}{style.paint(line, style.dim)}")
 
     def done(self, summary: str = "", timed: bool = False) -> None:
-        """Say what actually happened, on a line of its own.
-
-        A new line rather than a rewrite of the first one: by the time a step
-        finishes there may be a subprocess's output printed under it, and moving
-        the cursor back over that would eat it.
-        """
         if self._closed:
             return
         self._closed = True
@@ -183,8 +196,9 @@ class Step:
         if not summary:
             return
         style = self.console.style
+        mark = style.paint(self.console.icon("ok"), style.green)
         when = f" {style.paint('(' + human_time(self.elapsed) + ')', style.dim)}" if timed else ""
-        self.console.write(f"        {style.paint('->', style.dim)} {summary}{when}")
+        self.console.write(f"{BODY}{mark} {summary}{when}")
 
     def __enter__(self) -> Step:
         return self
@@ -198,7 +212,7 @@ class Step:
             # Not forced: it closes off the step line visually, and under
             # --quiet there is no step line for it to close. The error itself
             # is printed either way, and that is the part that matters.
-            self.console.write(f"        {style.paint('failed', style.red)}")
+            self.console.write(f"{BODY}{style.paint(self.console.icon('fail'), style.red)}")
         return False
 
 
@@ -210,15 +224,11 @@ class Console:
     functions that all want the same object.
     """
 
-    #: Indent for a line printed from inside a step, matching Step.detail.
-    STEP_BODY = " " * 8
-
     def __init__(self, stream=None, quiet: bool | None = None) -> None:
         self._stream = stream
         self.quiet = bool(os.environ.get(QUIET_ENV)) if quiet is None else quiet
         self._styled = (None, Style(False))
-        self._total: int | None = None
-        self._index = 0
+        self._fancy: tuple[object, bool] = (None, False)
         #: The step currently open, so a note from deep in the call stack lands
         #: under it instead of at the left margin. Set by `step`, cleared when
         #: that step is closed.
@@ -261,15 +271,41 @@ class Console:
         if quiet is not None:
             self.quiet = quiet
 
-    def plan(self, total: int | None) -> None:
-        """How many steps are coming, so they can be numbered `[2/6]`.
+    def icon(self, name: str) -> str:
+        """The icon for *name*, or its ASCII stand-in on a stream that cannot
+        carry one.
 
-        None is the honest answer when the count depends on what is already
-        installed. The counter then reads `[2]` and nobody is promised a finish
-        line that may not arrive.
+        Asked of the stream rather than of the platform. ``PYTHONIOENCODING``,
+        a redirect and a Windows console all change the answer independently of
+        what OS this is, and getting it wrong is not a cosmetic bug: encoding a
+        character the stream cannot represent raises UnicodeEncodeError from
+        inside ``print``, which ends the run.
         """
-        self._total = total
-        self._index = 0
+        fancy, plain = ICONS.get(name, ("", ""))
+        return fancy if fancy and self.supports_icons else plain
+
+    @property
+    def supports_icons(self) -> bool:
+        """Whether this stream can encode the icons. Decided once per stream."""
+        stream = self.stream
+        cached_for, answer = self._fancy
+        if cached_for is not stream:
+            answer = self._can_encode(stream)
+            self._fancy = (stream, answer)
+        return answer
+
+    @staticmethod
+    def _can_encode(stream) -> bool:
+        encoding = getattr(stream, "encoding", None)
+        if not encoding:
+            # No encoding attribute means an in-memory stream, as in the tests,
+            # which takes str straight through and can carry anything.
+            return not hasattr(stream, "buffer")
+        try:
+            "".join(fancy for fancy, _ in ICONS.values()).encode(encoding)
+        except (UnicodeEncodeError, LookupError):
+            return False
+        return True
 
     # -- primitives ---------------------------------------------------------
 
@@ -287,9 +323,9 @@ class Console:
         self.write(line)
         self.write()
 
-    def step(self, label: str, detail: str = "") -> Step:
-        self._index += 1
-        self.active_step = Step(self, self._index, self._total, label).begin(detail)
+    def step(self, message: str, icon: str = "") -> Step:
+        """Announce one piece of work. `message` is a phrase, not a label."""
+        self.active_step = Step(self, message, icon).begin()
         return self.active_step
 
     def info(self, text: str) -> None:
@@ -302,7 +338,7 @@ class Console:
         Callers four levels down from a step -- building the source graph, say --
         have no step to hand and should not be given one just to say a sentence.
         """
-        indent = self.STEP_BODY if self.active_step is not None else "  "
+        indent = BODY if self.active_step is not None else "  "
         for line in str(text).splitlines() or [""]:
             self.write(f"{indent}{self.style.paint(line, self.style.dim)}")
 
@@ -343,17 +379,28 @@ class Console:
         """
         if self.quiet or not self.style.enabled:
             return
+        # Name first. It was last, after a fixed-width bar and two sizes, which
+        # is exactly the part a narrow terminal cuts off -- leaving a meter that
+        # does not say what it is measuring: `9.6 MB / 13.3 MB  peo`.
         if total:
-            filled = int(24 * done / total)
-            bar = "=" * filled + "." * (24 - filled)
-            text = f"{bar}  {human_bytes(done)} / {human_bytes(total)}  {name}"
+            filled = int(20 * done / total)
+            bar = "#" * filled + "-" * (20 - filled)
+            text = f"{name}  {bar}  {human_bytes(done)} / {human_bytes(total)}"
         else:
-            text = f"{human_bytes(done)}  {name}"
-        print(f"\r      {text}", end="", file=self.stream, flush=True)
+            text = f"{name}  {human_bytes(done)}"
+        line = f"{BODY}{text}"
+        # Remembered so the erase covers what was actually drawn. A fixed width
+        # left the tail of a longer line on screen, and the next line printed
+        # over the front of it: `yolo26n-det-bf16-mla_tess-b1.tar.gz  (20.6 MB)`
+        # came out with a stray `1.tar.gzz` hanging off the end.
+        self._drawn = max(getattr(self, "_drawn", 0), len(line))
+        print(f"\r{line}", end="", file=self.stream, flush=True)
 
     def progress_done(self) -> None:
         if not self.quiet and self.style.enabled:
-            print("\r" + " " * 78 + "\r", end="", file=self.stream, flush=True)
+            width = max(getattr(self, "_drawn", 0), 78)
+            print("\r" + " " * width + "\r", end="", file=self.stream, flush=True)
+        self._drawn = 0
 
 
 #: The one console. Commands call :meth:`Console.configure` on it at startup.

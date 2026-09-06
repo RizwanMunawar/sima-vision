@@ -8,7 +8,7 @@ model:
   # Where the compiled archive is. This is the default, and if it is not there
   # yet the first run fetches it with `sima-cli` -- so you can delete the line.
   # An https URL works too, and is downloaded into assets/models/ once.
-  path: assets/models/yolo26m-det-bf16-mla_tess-b1.tar.gz
+  path: assets/models/yolo26n-det-bf16-mla_tess-b1.tar.gz
 
   # Class names, one per line. Unset uses the COCO list inside the package,
   # which is what these models were compiled against.

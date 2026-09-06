@@ -390,6 +390,37 @@ def test_draw_fps_writes_a_badge_top_left():
     assert not np.array_equal(img[0:40, 0:150], np.full((40, 150, 3), 40, np.uint8))
 
 
+def fill_pixels(img, colour) -> int:
+    """How many pixels of the top-left corner are exactly this colour."""
+    corner = img[:300, :700]
+    return int((corner == np.array(colour, np.uint8)).all(axis=2).sum())
+
+
+def test_the_badge_is_purple_and_larger_than_a_caption():
+    """Both are deliberate, so both are pinned.
+
+    The badge is glanced at while the video plays rather than read, so it is
+    set a little above the caption scale. Purple because a black block reads as
+    part of the footage -- as a blown-out shadow or a letterbox bar -- while a
+    colour that does not occur in the scene reads as an overlay.
+    """
+    draw = DrawConfig()
+    assert draw.hud_bg_color == (128, 0, 128)
+    assert draw.hud_text_scale > draw.text_scale
+
+    img = np.full((1080, 1920, 3), 40, np.uint8)
+    draw_fps(img, 24.0, draw)
+    assert fill_pixels(img, (128, 0, 128)) > 1000, "no purple badge was painted"
+
+
+def test_the_badge_still_follows_the_caption_scale_when_asked_to():
+    """0 has always meant "follow text_scale", and a real default must not
+    quietly take that escape hatch away."""
+    img = np.full((1080, 1920, 3), 40, np.uint8)
+    draw_fps(img, 24.0, DrawConfig(hud_text_scale=0.0, hud_bg_color=(7, 8, 9)))
+    assert fill_pixels(img, (7, 8, 9)) > 1000
+
+
 def test_draw_banner_covers_the_bottom_strip():
     img = frame()
     before = img.copy()

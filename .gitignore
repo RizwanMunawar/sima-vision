@@ -250,9 +250,16 @@ sandbox/
 **/frames/
 **/alerts/
 
-# `sima-vision watch` writes this next to wherever it was launched, so the
-# player it prints a command for can make sense of the RTP stream.
-*.sdp
+# Trained weights. These are someone's own training run, often tens of
+# megabytes, and `sima-vision compile` is pointed at them where they already
+# are -- there is no reason for one to arrive here.
+*.pt
+*.onnx
+
+# `sima-cli install` drops the SDK container's config and its TLS keypair
+# beside wherever it was run. A private key does not belong in a repository,
+# and this one arrived in a commit before anyone looked.
+.ghcr.io-*/
 
 # Terminal captures
 logs.txt

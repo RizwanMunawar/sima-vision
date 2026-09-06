@@ -27,7 +27,11 @@ def here(tmp_path, monkeypatch):
 
 @pytest.fixture
 def offline(monkeypatch):
-    """Serve four bytes for any URL, and return the list of URLs asked for."""
+    """Serve four bytes for any URL, and return the list of URLs asked for.
+
+    Also clears the cached release listing. It is a module global, so one test
+    that fills it would answer for every test after it.
+    """
     asked: list[str] = []
 
     class Response:
@@ -50,6 +54,7 @@ def offline(monkeypatch):
         return Response()
 
     monkeypatch.setattr(assets.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(assets, "_published", None)
     return asked
 
 
@@ -73,7 +78,10 @@ def test_every_task_has_a_model_and_a_clip():
         entry = assets.CATALOGUE[name]
         assert entry.clip in assets.SAMPLE_VIDEOS
         assert entry.model_file.endswith(".tar.gz")
-        assert assets.model_url(name).startswith(assets.MODEL_BASE)
+        # Every default is on the public release, so a first run needs no
+        # login. That is the whole point of the defaults being these packs.
+        assert assets.on_release(entry.model_file), entry.model_file
+        assert assets.model_url(name) == assets.release_url(entry.model_file)
 
 
 def test_only_http_urls_count_as_downloadable():
@@ -151,17 +159,54 @@ def test_an_existing_model_is_used_as_it_stands(here, monkeypatch):
     assert assets.ensure_model("det.tar.gz", "detect") == "det.tar.gz"
 
 
-def test_a_missing_model_without_sima_cli_prints_the_command(here, monkeypatch):
+def test_a_published_pack_needs_no_login_at_all(here, offline, monkeypatch):
+    """The change this release move is for.
+
+    Every default pack used to go through `sima-cli`, which needs a
+    community.sima.ai login, so a first run stopped dead without one. They are
+    on the same public release as the clips now, so they are a plain GET.
+    """
+    monkeypatch.setattr(assets.shutil, "which", lambda _name: None)   # no sima-cli
+    monkeypatch.setattr(
+        assets.subprocess, "run",
+        lambda *a, **k: pytest.fail("a published pack must not shell out"),
+    )
+    path = assets.ensure_model(assets.default_model_path("detect"), "detect")
+
+    assert Path(path).is_file()
+    assert offline == [assets.release_url(assets.CATALOGUE["detect"].model_file)]
+
+
+def test_a_pack_named_by_hand_is_fetched_into_the_assets_directory(here, offline):
+    """`--model yolo26s-det-...tar.gz` should not need a URL or a path."""
+    path = assets.ensure_model("yolo26s-det-bf16-mla_tess-b1.tar.gz", "detect")
+
+    assert Path(path).parent == Path("assets/models"), "not the working directory"
+    assert Path(path).is_file()
+    assert offline == [assets.release_url("yolo26s-det-bf16-mla_tess-b1.tar.gz")]
+
+
+def test_an_unpublished_pack_still_goes_through_sima_cli(here, monkeypatch):
+    """The m packs are not on the release, so that path has to stay."""
     monkeypatch.setattr(assets.shutil, "which", lambda _name: None)
+    monkeypatch.setitem(
+        assets.CATALOGUE, "detect",
+        assets.TaskAssets("yolo26-detection", "yolo26m-det-bf16-mla_tess-b1.tar.gz", CLIP),
+    )
     with pytest.raises(RuntimeError) as caught:
         assets.ensure_model(assets.default_model_path("detect"), "detect")
     message = str(caught.value)
     assert "sima-cli login" in message
-    assert assets.model_url("detect") in message
+    assert assets.MODEL_BASE in message
 
 
 def test_a_missing_model_is_fetched_with_sima_cli(here, monkeypatch):
     monkeypatch.setattr(assets.shutil, "which", lambda _name: "/usr/bin/sima-cli")
+    monkeypatch.setitem(
+        assets.CATALOGUE, "segment",
+        assets.TaskAssets("yolo26-segmentation", "yolo26m-seg-bf16-mla_tess-b1.tar.gz",
+                          CLIP),
+    )
     seen = {}
 
     class Result:
@@ -190,6 +235,11 @@ def test_a_missing_model_is_fetched_with_sima_cli(here, monkeypatch):
 
 def test_sima_cli_failing_is_reported(here, monkeypatch):
     monkeypatch.setattr(assets.shutil, "which", lambda _name: "/usr/bin/sima-cli")
+    monkeypatch.setitem(
+        assets.CATALOGUE, "fall",
+        assets.TaskAssets("yolo26-detection", "yolo26m-det-bf16-mla_tess-b1.tar.gz",
+                          CLIP),
+    )
 
     class Result:
         returncode = 1
@@ -224,24 +274,36 @@ def test_ensure_assets_leaves_a_resolved_config_alone(here, offline):
 
 
 def test_ensure_assets_fills_in_both_defaults(here, offline, monkeypatch):
-    monkeypatch.setattr(assets.shutil, "which", lambda _name: "/usr/bin/sima-cli")
-
-    class Result:
-        returncode = 0
-
-    monkeypatch.setattr(
-        assets.subprocess,
-        "run",
-        lambda command, check=False, env=None: (
-            Path(command[-1]).write_bytes(b"tar"), Result()
-        )[1],
-    )
+    monkeypatch.setattr(assets.shutil, "which", lambda _name: None)
 
     cfg = TASKS["detect"]().load(None, {}, use_file=False)
     resolved = assets.ensure_assets(cfg, "detect")
     assert Path(resolved.source_uri).is_file()
     assert Path(resolved.model_path).is_file()
-    assert offline == [f"{assets.SAMPLE_RELEASE}/{CLIP}"]
+    # Clip and pack, both from the release, both without sima-cli on PATH.
+    assert offline == [
+        f"{assets.SAMPLE_RELEASE}/{CLIP}",
+        assets.release_url(assets.CATALOGUE["detect"].model_file),
+    ]
+
+
+def test_a_task_fetches_its_own_pack_and_no_others(here, offline, monkeypatch):
+    """One pack per run, not the whole published set.
+
+    detect and fall share the detection pack, segment pulls the segmentation
+    one, and nothing pulls all four: a first run should start, not download a
+    catalogue.
+    """
+    monkeypatch.setattr(assets.shutil, "which", lambda _name: None)
+
+    cfg = TASKS["segment"]().load(None, {}, use_file=False)
+    assets.ensure_assets(cfg, "segment")
+
+    packs = [url for url in offline if url.endswith(".tar.gz")]
+    assert packs == [assets.release_url("yolo26n-seg-bf16-mla_tess.tar.gz")]
+
+
+# -- what is downloaded has to be what was published --
 
 
 # -- the cache must not confuse two URLs, or accept half a file --
@@ -362,3 +424,90 @@ def test_a_length_the_server_does_not_give_is_still_accepted(here, monkeypatch):
     monkeypatch.setattr(assets.urllib.request, "urlopen", lambda *a, **k: NoLength())
     assert assets.download("https://example.com/clip.h264", Path("a.h264")) is True
     assert Path("a.h264").read_bytes() == b"payload"
+
+
+# -- a name the release has but the tables do not --
+
+
+def test_a_name_only_the_release_knows_is_still_fetched(here, offline, monkeypatch):
+    """The tables drift. The release is what actually decides.
+
+    Four clips were published and two were listed here, so naming either of the
+    other two got "source file not found" for a file sitting on the very release
+    this app downloads from.
+    """
+    monkeypatch.setattr(assets, "SAMPLE_VIDEOS", {})
+    monkeypatch.setattr(
+        assets, "published_assets", lambda: frozenset({"people-walking-small.mp4"})
+    )
+    uri = assets.ensure_source("people-walking-small.mp4")
+    assert uri == "assets/videos/people-walking-small.mp4", "a bare name lands in assets"
+    assert Path(uri).is_file()
+    assert offline == [f"{assets.SAMPLE_RELEASE}/people-walking-small.mp4"]
+
+
+def test_a_model_only_the_release_knows_is_still_fetched(here, offline, monkeypatch):
+    monkeypatch.setattr(assets, "RELEASE_MODELS", {})
+    monkeypatch.setattr(
+        assets, "published_assets", lambda: frozenset({"yolo26x-det-bf16.tar.gz"})
+    )
+    path = assets.ensure_model("yolo26x-det-bf16.tar.gz", "detect")
+    assert Path(path).is_file()
+    assert offline == [f"{assets.SAMPLE_RELEASE}/yolo26x-det-bf16.tar.gz"]
+
+
+def test_someone_elses_path_is_not_looked_up(here, offline, monkeypatch):
+    """`nowhere/mine.h264` is a missing file of theirs, not a published name.
+
+    Asking GitHub about it costs a round trip to confirm what the path already
+    says, and the error `check_source_file` gives is the better answer anyway.
+    """
+    def refuse():
+        raise AssertionError("must not ask the release about a path like this")
+
+    monkeypatch.setattr(assets, "published_assets", refuse)
+    assert assets.ensure_source("nowhere/mine.h264") == "nowhere/mine.h264"
+    assert not offline
+
+
+def test_our_own_assets_directory_is_worth_asking_about(monkeypatch):
+    """The defaults live there, so a name under it could well be published."""
+    monkeypatch.setenv(assets.ASSETS_ENV, "assets")
+    assert assets.worth_asking(Path("clip.h264")) is True
+    assert assets.worth_asking(assets.videos_dir() / "clip.h264") is True
+    assert assets.worth_asking(assets.models_dir() / "pack.tar.gz") is True
+    assert assets.worth_asking(Path("nowhere/mine.h264")) is False
+
+
+def test_a_release_that_cannot_be_asked_is_not_an_error(monkeypatch):
+    """No network, rate limited, private repo: the tables are then the answer."""
+    def boom(url, timeout=0):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr(assets, "_published", None)
+    monkeypatch.setattr(assets.urllib.request, "urlopen", boom)
+    assert assets.published_assets() == frozenset()
+
+
+def test_the_release_is_asked_once_per_run(monkeypatch):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, *_a):
+            return b'{"assets": [{"name": "a.tar.gz"}]}'
+
+    def urlopen(url, timeout=0):
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(assets, "_published", None)
+    monkeypatch.setattr(assets.urllib.request, "urlopen", urlopen)
+    assert assets.published_assets() == frozenset({"a.tar.gz"})
+    assert assets.published_assets() == frozenset({"a.tar.gz"})
+    assert len(calls) == 1, "the listing is cached for the process"

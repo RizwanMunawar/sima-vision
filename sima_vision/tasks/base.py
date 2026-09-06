@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
+from .. import segments
 from ..assets import ensure_assets
 from ..config import (
     BaseConfig,
@@ -18,6 +20,10 @@ from ..console import console, human_bytes
 from ..media import (
     check_source_file,
     check_source_support,
+    decoder_budget_warning,
+    decoder_buffers_for,
+    ensure_annex_b,
+    is_elementary_h264,
     resolve_source_geometry,
     source_frame_count,
 )
@@ -28,7 +34,7 @@ from ..neat import (
     make_run_options,
     resolve_flow_control,
 )
-from ..runloop import Stopper, TaskRuntime, run_pipeline
+from ..runloop import Stopper, TaskRuntime, run_pipeline, sink_depth_for
 from ..runtime import FAMILY_DECODE_TOKENS
 from ..sinks import Pipeline, load_labels, open_video_writer, start_insight
 
@@ -171,6 +177,20 @@ class Task:
         step.detail(f"{where}  ({cfg.source_type}{f', {human_bytes(size)}' if size else ''})")
         width, height, fps = resolve_source_geometry(cfg)
         step.note(describe_preprocess(cfg, width, height))
+        # Said here rather than after the stall it predicts. The SPS is already
+        # open and the arithmetic is settled before a frame moves, so there is
+        # no reason to spend a model load and half a clip finding out.
+        if cfg.source_type == "video" and is_elementary_h264(cfg.source_uri):
+            # What the decoder is actually asked for, which is what the budget
+            # has to be measured against. Left to itself the daemon picks 8 for
+            # 1080p no matter what the stream keeps, and that is the stall.
+            asked = decoder_buffers_for(cfg, width, height)
+            pool = asked or cfg.decoder_pool
+            if asked:
+                step.detail(f"decoder: asking for {asked} buffers (pyneat picks 8 alone)")
+            budget = decoder_budget_warning(cfg.source_uri, width, height, pool)
+            if budget:
+                console.warn(budget)
         step.done(f"{width}x{height} @ {fps} fps")
         return width, height, fps
 
@@ -198,12 +218,22 @@ class Task:
         if pipeline.source_frames:
             step.detail(f"{pipeline.source_frames} coded pictures in the clip")
 
+        pieces = self.plan_pieces(cfg, pipeline, step)
+        # The graph below is built for the first piece. `cfg` keeps naming the
+        # whole clip so the counts and the reports stay about the clip.
+        cfg = replace(cfg, source_uri=str(pieces[0][0]))
+
         self.prepare(cfg, pipeline, step)
 
         preset, policy = resolve_flow_control(cfg)
+        # The effective depth, not the configured floor. On a file source the
+        # backlog is sized to the clip, and that number is the difference
+        # between a complete recording and a stall, so it belongs on screen.
+        depth = sink_depth_for(cfg, pipeline)
+        held_mb = depth * width * height * 3 / (1 << 20)
         step.detail(
             f"flow: preset={preset} overflow={policy} queue_depth={cfg.queue_depth} "
-            f"output_buffers={cfg.output_buffers} sinks={cfg.sink_queue_depth}"
+            f"output_buffers={cfg.output_buffers} sinks={depth} (up to {held_mb:.0f} MB)"
         )
         if policy == "block":
             step.note(
@@ -227,6 +257,13 @@ class Task:
         pipeline.graph = graph
         pipeline.run = graph.build(make_run_options(cfg))
 
+        # Pieces two onward, if the clip had to be cut. Nothing here is built
+        # yet: the first piece is already running above, and each later one
+        # replaces only the graph and the Run. The model, the writer and the
+        # sink thread carry across, which is what puts every piece into one
+        # continuous recording.
+        self.pending = list(pieces[1:])
+
         if cfg.insight_enable:
             start_insight(cfg, pipeline, width, height, fps, step)
         if cfg.save_enable:
@@ -240,15 +277,81 @@ class Task:
                 f"video: {pipeline.writer_path} codec={cfg.video_codec} "
                 f"fps={cfg.video_fps or fps} hud={cfg.video_hud}"
             )
+        if not (cfg.save_enable or cfg.video_enable or cfg.insight_enable):
+            # Not an error. `stall_causes` tells a stalled run to come back with
+            # `--no-save --no-video`, and for a while the app answered that
+            # advice with "enable at least one of output.save, output.video or
+            # output.insight" -- refusing the one run that separates a slow app
+            # from a stalled graph. Saying what the run does is enough.
+            step.note(
+                "no outputs are enabled, so this run writes nothing and measures "
+                "the graph alone. That is what tells a slow app apart from a "
+                "stalled source."
+            )
         step.done(f"{self.graph_name} ready", timed=True)
+
+    def plan_pieces(self, cfg, pipeline: Pipeline, step):
+        """Cut a clip too long for one decode, or hand back the one piece.
+
+        Returns:
+            A list of ``(path, frames)``, always at least one entry long.
+        """
+        whole = [(Path(cfg.source_uri), pipeline.source_frames)]
+        if (cfg.source_type != "video" or not cfg.segment_frames
+                or not is_elementary_h264(cfg.source_uri)):
+            return whole
+        source = Path(cfg.source_uri)
+        if not source.is_file():
+            return whole
+
+        pieces = segments.split(source, source.parent / "parts", cfg.segment_frames)
+        told = segments.describe(pieces, pipeline.source_frames)
+        if told:
+            step.detail(told)
+        elif pipeline.source_frames > cfg.segment_frames:
+            # Worth saying: the run is about to attempt more in one decode than
+            # this board manages, and the reason it was not cut is fixable.
+            console.warn(
+                f"this clip is {pipeline.source_frames} frames and its keyframes are"
+                f" too far apart to cut into {cfg.segment_frames}s,\n"
+                "  so it has to be decoded in one go. The decoder stops around\n"
+                "  195 frames, so expect a short recording. Re-encode with\n"
+                "  keyframes it can be cut on:\n"
+                "    ffmpeg -i clip.mp4 -c:v libx264 -profile:v main -bf 0 -refs 1 \\\n"
+                "      -g 50 -keyint_min 50 -sc_threshold 0 -c:a copy shallow.mp4"
+            )
+        return pieces
+
+    def next_piece(self, cfg, pipeline: Pipeline, geometry) -> bool:
+        """Point the pipeline at the next piece. False when there are none.
+
+        The Run is replaced; the model, the recording and the sink thread are
+        not. Closing the old Run first matters: it holds the MLA, and two live
+        Runs on one board is how the next launch fails with a busy device.
+        """
+        if not getattr(self, "pending", None):
+            return False
+        path, frames = self.pending.pop(0)
+        width, height, fps = geometry
+        console.report(f"decoding the next piece: {path.name} ({frames} frames)")
+
+        if pipeline.run is not None:
+            pipeline.run.close()
+        graph = build_task_graph(
+            replace(cfg, source_uri=str(path)), pipeline.model, width, height, fps,
+            self.graph_name, self.result_label, self.output_label,
+        )
+        pipeline.graph = graph
+        pipeline.run = graph.build(make_run_options(cfg))
+        return True
 
     def build(self, cfg) -> Pipeline:
         """The startup sequence, as three numbered steps. Shared by every task."""
-        with console.step("source", "probing the stream") as step:
+        with console.step("Opening the video", "video") as step:
             geometry = self.open_source(cfg, step)
-        with console.step("model", f"loading {Path(cfg.model_path).name}") as step:
+        with console.step(f"Loading the model {Path(cfg.model_path).name}", "model") as step:
             pipeline = self.load_model(cfg, geometry[0], geometry[1], step)
-        with console.step("pipeline", "building the Neat graph") as step:
+        with console.step("Building the pipeline", "build") as step:
             self.build_pipeline(cfg, pipeline, geometry, step)
         return pipeline
 
@@ -264,13 +367,22 @@ class Task:
         by the time the graph is built the Run holds the MLA, and leaving it
         held makes the *next* launch fail with a busy device.
         """
-        with console.step("assets", "model archive and video source") as step:
+        with console.step("Fetching the model and the video", "assets") as step:
             cfg = ensure_assets(cfg, self.name, step)
+            # After the fetch, because the file has to exist to be reframed,
+            # and before build(), because everything downstream -- the SPS
+            # probe, the picture count, the source graph -- is written against
+            # a raw stream.
+            cfg = ensure_annex_b(cfg, step)
             step.done("ready")
         try:
             pipeline = self.build(cfg)
-            console.banner("running", "press Ctrl-C to stop")
-            return run_pipeline(pipeline, cfg, stopper, self.runtime(cfg, pipeline))
+            console.step("Processing video", "run").note("press Ctrl-C to stop")
+            geometry = (pipeline.frame_w, pipeline.frame_h, pipeline.fps)
+            return run_pipeline(
+                pipeline, cfg, stopper, self.runtime(cfg, pipeline),
+                rebuild=lambda: self.next_piece(cfg, pipeline, geometry),
+            )
         finally:
             if self.pipeline is not None:
                 self.pipeline.close()

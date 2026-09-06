@@ -18,6 +18,8 @@ import re
 import shlex
 from pathlib import Path
 
+import pytest
+
 from sima_vision.api import _alias_table
 from sima_vision.cli import build_parser
 from sima_vision.tasks import TASKS
@@ -32,6 +34,8 @@ PLACEHOLDERS = ("<", ">", "...", "$EDITOR", "EMAIL", "PATH", "NAME", "DIR", "|")
 #: still appear somewhere, so a section being rewritten does not leave a stale
 #: exemption behind.
 FOREIGN_FLAGS = {
+    "--install": "wsl --install -d Ubuntu",
+    "--workspace": "sima-cli sdk setup --workspace",
 }
 
 #: Commands the README has to mention by name. The list is short because the
@@ -206,13 +210,26 @@ def test_every_image_exists():
 
 
 def test_no_asset_is_left_unused():
-    """An image nothing shows is dead weight in every clone of the repo."""
+    """An image nothing shows is dead weight in every clone of the repo.
+
+    Asks git what is tracked rather than walking the directory. `assets/models`
+    and `assets/videos` are where a run downloads to, they are gitignored, and a
+    developer who has ever run this locally has a 20 MB model pack sitting
+    there, which is not dead weight in anybody's clone.
+    """
+    import subprocess
+
+    listing = subprocess.run(
+        ["git", "ls-files", "assets"],
+        cwd=REPO, capture_output=True, text=True, check=False,
+    )
+    if listing.returncode != 0:                       # not a checkout
+        pytest.skip("not a git checkout, so nothing to ask about tracked files")
+
     text = README.read_text(encoding="utf-8")
-    unused = [
-        path.relative_to(REPO).as_posix()
-        for path in sorted((REPO / "assets").rglob("*"))
-        if path.is_file() and path.relative_to(REPO).as_posix() not in text
-    ]
+    tracked = [name for name in listing.stdout.split() if name]
+    assert tracked, "assets/ should hold the logo at least"
+    unused = [name for name in tracked if name not in text]
     assert not unused, f"assets/ holds files the README never shows: {unused}"
 
 
@@ -281,3 +298,38 @@ def test_the_version_is_written_in_exactly_one_place():
     found = _re.findall(r'(?m)^__version__ = "(.*)"$', init)
     assert found == [__version__], f"expected one __version__ line, got {found}"
     assert _re.fullmatch(r"\d+\.\d+\.\d+([ab]\d+|rc\d+)?", __version__), __version__
+
+
+def test_the_flags_table_lists_every_flag():
+    """The README promises "every flag", so it has to be every flag.
+
+    It was three tables before, one shared and one per app, and the shared one
+    held seven of thirty-two. A reader had no way to know which was the case.
+    """
+    subparsers = [
+        action.choices
+        for action in build_parser()._actions
+        if isinstance(getattr(action, "choices", None), dict)
+    ][0]
+    real = {
+        option
+        for task in TASKS
+        for action in subparsers[task]._actions
+        if action.dest != "help"
+        for option in action.option_strings
+        if option.startswith("--")
+    }
+
+    # Sliced to the next heading, not a named one: the sections have been
+    # reordered twice, and a hard-coded end anchor silently swallowed whichever
+    # section had moved in between, along with every flag it mentioned.
+    text = README.read_text(encoding="utf-8")
+    start = text.index("## Apps arguments")
+    end = text.index(chr(10) + "## ", start + 1)
+    table = text[start:end]
+    documented = set(re.findall(r"`(--[a-z][a-z0-9-]*)", table))
+
+    missing = sorted(real - documented)
+    assert not missing, f"the flags table is missing: {missing}"
+    invented = sorted(documented - real)
+    assert not invented, f"the flags table lists flags that do not exist: {invented}"
