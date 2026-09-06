@@ -22,10 +22,10 @@ HOST = "sima@192.168.137.50"
 def tools(monkeypatch, tmp_path):
     """Pretend ssh and scp are installed, and forget any real DevKit address.
 
-    Also run from a scratch directory. `watch` writes its SDP to
-    ./sima-vision.sdp when it is not told otherwise, and six tests here leave
-    sdp_path as None -- which quietly dropped the file into the repository root
-    on every test run until it turned up in `git status`.
+    Also run from a scratch directory. Nothing here writes into it any more --
+    the command that did, `watch`, is gone -- but a test that runs from the
+    repository root is one accident away from leaving something in it, which is
+    how `sima-vision.sdp` came to be committed once.
     """
     monkeypatch.setattr(devkit.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.delenv(devkit.DEVKIT_ENV, raising=False)

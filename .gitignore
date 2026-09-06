@@ -250,10 +250,6 @@ sandbox/
 **/frames/
 **/alerts/
 
-# `sima-vision watch` writes this next to wherever it was launched, so the
-# player it prints a command for can make sense of the RTP stream.
-*.sdp
-
 # Terminal captures
 logs.txt
 *.log
