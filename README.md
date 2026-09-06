@@ -162,35 +162,34 @@ beats the built-in defaults.
 
 ![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
 
-Trained a YOLO26 detector or segmenter? It has to be compiled into a `.tar.gz` pack before
-the board can run it, and that is one command once the toolchain is in place.
+A trained `.pt` has to be compiled into a `.tar.gz` pack before the board can run it.
 
 > [!IMPORTANT]
-> **This is the only place Docker and WSL come into it, and both live on your PC.**
-> [Quickstart](#quickstart) needs neither: a pretrained model on the DevKit really is
-> those two commands. Nothing in this section runs on the board.
+> Docker and WSL are needed here and nowhere else, and both live on your PC.
+> [Quickstart](#quickstart) needs neither.
 
 <details>
 <summary>🧠 &nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b> &nbsp;·&nbsp; six steps, about 30 minutes the first time</summary>
 
 <br>
 
-The compiler is the `afe` package, and it lives only inside the Palette Model SDK
-container: x86 Docker, which on Windows means WSL2. You will need a
-[community.sima.ai](https://community.sima.ai) account and about 10 GB of disk.
+Needs a [community.sima.ai](https://community.sima.ai) account and ~10 GB of disk. The
+compiler is the `afe` package and exists only inside the Palette Model SDK container:
+x86 Docker, which on Windows means WSL2.
 
-**1. WSL2.** PowerShell on your PC, as Administrator. Want `Ubuntu`, `Running`, version `2`:
+**1. WSL2** &nbsp; PowerShell, as Administrator
 
 ```powershell
 wsl --install -d Ubuntu
-wsl -l -v
+wsl -l -v                            # want: Ubuntu, Running, 2
 ```
 
-**2. Docker Desktop.** [Install it](https://docs.docker.com/get-started/get-docker/), then
-switch on **Settings → Resources → WSL integration** for Ubuntu. Skip that and `docker`
-works in PowerShell but is missing inside Ubuntu, which is where it is needed.
+**2. Docker Desktop** &nbsp; [install it](https://docs.docker.com/get-started/get-docker/),
+then **Settings → Resources → WSL integration** → on, for Ubuntu
 
-**3. Into Ubuntu.** Everything below is typed there; `exit` comes back.
+Without that toggle `docker` works in PowerShell and is missing inside Ubuntu.
+
+**3. Into Ubuntu** &nbsp; everything below is typed there; `exit` comes back
 
 ```powershell
 wsl -d Ubuntu
@@ -200,49 +199,37 @@ wsl -d Ubuntu
 docker run hello-world               # must print "Hello from Docker!"
 ```
 
-**4. sima-cli.** Ubuntu refuses a bare `pip install`, so it goes in a virtualenv. The last
-line pulls several GB, once per machine:
+**4. sima-cli**
 
 ```bash
 sudo apt update && sudo apt install -y python3-venv python3-pip
-python3 -m venv ~/sima
-source ~/sima/bin/activate           # Linux, inside WSL. No PowerShell equivalent
+python3 -m venv ~/sima               # Ubuntu refuses a bare pip install
+source ~/sima/bin/activate           # every new shell starts outside it. Look for (sima)
 pip install sima-cli
 sima-cli login
-sima-cli install ghcr:sima-neat/sdk:v2.0.0
+sima-cli install ghcr:sima-neat/sdk:v2.0.0     # several GB, once per machine
 ```
 
-A new shell starts *outside* the venv, so `sima-cli` goes missing until you `source` it
-again. `(sima)` in the prompt is the tell.
-
-**5. Convert.** `--workspace` is the folder that appears inside the container, so run this
-from the directory holding your `.pt`:
+**5. Convert** &nbsp; run from the directory holding your `.pt`
 
 ```bash
-sima-cli sdk setup --workspace .  # could take 15-20 minutes for installation
+sima-cli sdk setup --workspace .     # . is what gets mounted. 15-20 minutes
 activate-model-compiler
 ```
 
 ```bash
 pip install sima-vision ultralytics
-sima-vision compile best.pt          # -> build/best_mpk.tar.gz, could take upto 5 minutes
+sima-vision compile best.pt          # -> build/best_mpk.tar.gz, 10-15 minutes
 ```
 
-That one command exports the raw-head ONNX the board's box decoder reads, quantizes to
-bfloat16, tessellates for the MLA and emits the ELF, using the compile recipe a published
-pack shipped rather than a paraphrase of it.
+One command, four stages: raw-head ONNX, bfloat16 quantization, MLA tessellation, ELF.
 
-**6. Run it.** ![on the DevKit](https://img.shields.io/badge/run_on-DevKit-E63946?style=flat-square)
+**6. Run it** &nbsp; ![on the DevKit](https://img.shields.io/badge/run_on-DevKit-E63946?style=flat-square)
 
 ```bash
 sima-vision push build/best_mpk.tar.gz
 sima-vision detect --model best_mpk.tar.gz
-```
-
-A URL works too, cached under `assets/models`:
-
-```bash
-sima-vision detect --model https://example.com/my-model.tar.gz
+sima-vision detect --model https://example.com/my-model.tar.gz   # a URL works too
 ```
 
 </details>
