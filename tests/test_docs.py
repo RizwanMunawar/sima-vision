@@ -32,6 +32,7 @@ PLACEHOLDERS = ("<", ">", "...", "$EDITOR", "EMAIL", "PATH", "NAME", "DIR", "|")
 #: still appear somewhere, so a section being rewritten does not leave a stale
 #: exemption behind.
 FOREIGN_FLAGS = {
+    "--workspace": "sima-cli sdk setup --workspace",
 }
 
 #: Commands the README has to mention by name. The list is short because the

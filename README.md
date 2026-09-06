@@ -124,24 +124,37 @@ No path and no URL: a published name is downloaded into `assets/models` and reus
 
 ### Your own model
 
-Train a YOLO26 detector, then, **on your PC** (not the DevKit):
+Train a YOLO26 detector, then convert it **inside the Palette Model SDK container** --
+that is where the compiler lives, and it is four commands to get there:
 
 ```bash
-sima-vision compile best.pt
+# On your PC, once: mount the folder holding best.pt into the SDK containers
+sima-cli sdk setup --workspace ~/workspace
+
+# Then, any time: open the Model SDK shell
+sima-cli sdk model
 ```
 
-**Inside the Palette container that is the whole conversion**: it exports the ONNX, then
-runs the SiMa Model SDK on it and writes `build/best_mpk.tar.gz`.
+```bash
+# Inside that shell, in ~/workspace
+pip install sima-vision ultralytics
+sima-vision compile best.pt          # -> build/best_mpk.tar.gz
+```
 
-Two halves are happening. The export produces the raw-head ONNX the board's box decoder
-reads &mdash; six tensors, `bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled
-`[1, 84, 8400]` &mdash; and needs `pip install ultralytics`. The compile is bfloat16
-quantization, MLA tessellation and the ELF, which is the Model SDK's job, and it runs the
-recipe a published pack shipped rather than a paraphrase of it.
+That is the whole conversion. It exports the raw-head ONNX the board's box decoder reads
+&mdash; six tensors, `bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled
+`[1, 84, 8400]` &mdash; then quantizes to bfloat16, tessellates for the MLA and emits the
+ELF, using the compile recipe a published pack shipped rather than a paraphrase of it.
 
-**Anywhere else**, the SDK is not importable and the ONNX is as far as the machine goes.
-`compile` then hands you the ONNX, the recipe and the commands to finish in Palette,
-rather than failing at the last step.
+> [!NOTE]
+> **The compiler is x86-only.** It is the `afe` package, and it exists only in that
+> container: not on the DevKit, not on a plain laptop, and not installable next to this.
+> `python -c "import afe"` says which side of the line you are on. Run `compile`
+> anywhere else and you get the ONNX plus the steps to finish &mdash; never a crash at
+> the last one.
+>
+> If `sima-cli sdk model` is not there, the Model Compiler extension was declined during
+> setup. Re-run `sima-cli sdk setup` and accept it; it is a 9 GB download.
 
 Either way, the pack ends up on the board the same way:
 
