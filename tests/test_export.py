@@ -167,6 +167,72 @@ def test_a_detection_head_reports_no_coefficients():
     assert export.mask_channels(FakeHead()) == 0
 
 
+def test_the_branch_that_gets_exported_is_the_one_that_predicts():
+    """A YOLO26 head carries two complete sets, and fuse() deletes this one.
+
+    cv2/cv3 are the one2many branch: supervision during training. What
+    Detect.forward actually runs is one2one_cv2/one2one_cv3. Both come out
+    4 and nc channels wide at three levels, so every shape check passes
+    either way and the pack is simply built from the wrong weights.
+    """
+    head = FakeHead()
+    head.one2one_cv2 = ["one2one boxes"]
+    head.one2one_cv3 = ["one2one classes"]
+
+    boxes, classes, coefficients = export.head_branches(head)
+    assert boxes == ["one2one boxes"]
+    assert classes == ["one2one classes"]
+    assert coefficients is None
+
+
+def test_a_head_with_one_set_of_branches_uses_that_one():
+    head = FakeHead()
+    boxes, classes, coefficients = export.head_branches(head)
+    assert boxes is head.cv2 and classes is head.cv3
+    assert coefficients is None
+
+
+def test_a_segmentation_head_exports_its_one2one_coefficients():
+    head = FakeSegHead()
+    head.one2one_cv2, head.one2one_cv3, head.one2one_cv4 = ["b"], ["c"], ["m"]
+    assert export.head_branches(head)[2] == ["m"]
+
+
+def test_a_head_whose_branches_were_fused_away_is_refused():
+    """`fuse()` sets cv2 = cv3 = cv4 = None, and a checkpoint can be saved
+    after it: the head is the right shape with nothing left to run."""
+    head = FakeHead()
+    head.cv2 = head.cv3 = None
+    with pytest.raises(RuntimeError, match="no box or class branch"):
+        export.check_head(FakeNet(head))
+
+
+def test_the_yolo26_proto_is_handed_every_level():
+    """Proto26 refines and sums all three levels; Proto takes the finest.
+
+    Both are called `proto`, and handing the list to the old one indexes a
+    tensor by 1: `index 1 is out of bounds for dimension 0 with size 1`, which
+    names neither the module nor the mistake.
+    """
+    class Proto26:
+        feat_refine = ()
+
+        def __call__(self, feats):
+            return ("every level", feats)
+
+    class Proto:
+        def __call__(self, feats):
+            return ("finest only", feats)
+
+    head = FakeSegHead()
+    levels = ["p3", "p4", "p5"]
+
+    head.proto = Proto26()
+    assert export.proto_tensor(head, levels) == ("every level", levels)
+    head.proto = Proto()
+    assert export.proto_tensor(head, levels) == ("finest only", "p3")
+
+
 def test_the_head_is_replaced_by_one_that_emits_every_branch():
     """Ten tensors, boxes then classes then coefficients then the prototypes.
 
@@ -181,6 +247,30 @@ def test_the_head_is_replaced_by_one_that_emits_every_branch():
 
     wrapper = export.RawHead(FakeNet(head))
     assert tuple(wrapper.outputs([0, 1, 2])) == export.SEG_OUTPUTS
+
+
+def test_an_export_that_dies_inside_the_model_says_where():
+    """`index 1 is out of bounds for dimension 0 with size 1` was the whole
+    message, for a wrong argument to a module three files away."""
+    def inner():
+        raise IndexError("index 1 is out of bounds for dimension 0 with size 1")
+
+    try:
+        inner()
+    except IndexError as exc:
+        failure = export.export_failure(exc, FakeSegHead())
+
+    text = str(failure)
+    assert "IndexError" in text
+    assert "FakeSegHead" in text
+    assert "test_export.py:" in text
+    assert "in inner" in text
+
+
+def test_a_failure_with_no_traceback_is_still_reported():
+    failure = export.export_failure(ValueError("nope"), FakeHead())
+    assert "ValueError: nope" in str(failure)
+    assert "FakeHead" in str(failure)
 
 
 # ── the recipe travels inside the pack ──

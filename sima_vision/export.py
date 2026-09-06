@@ -26,6 +26,13 @@ off ``Segment.cv4``, 32 coefficients a level, and ``mask_proto`` off
 produces six of the ten, which compiles into a pack that draws boxes and no
 masks.
 
+Which *branch* those come off matters as much as which tensors. A YOLO26 head
+is end2end and carries two full sets: ``cv2``/``cv3``/``cv4``, the one2many
+branch that exists to supervise training and that ``fuse()`` deletes, and
+``one2one_cv2``/``one2one_cv3``/``one2one_cv4``, which is what a prediction is
+actually made of. They are the same shape, so taking the wrong one is invisible
+until the detections are compared against the model they came from.
+
 Those names and that order are not invented here. They are read out of a
 working pack's own ``*_mpk.json``, where the final PassThrough carries exactly
 ``bbox_0..2``, ``class_logit_0..2``, ``mask_coeff_0..2``, ``mask_proto``. Four
@@ -88,16 +95,18 @@ class RawHead:
     def __init__(self, net) -> None:
         self.net = net
         self.head = net.model[-1]
+        self.branches = head_branches(self.head)
         self.masks = mask_channels(self.head)
 
     def outputs(self, feats: list) -> list:
         """Every tensor the head produces, in the order the pack expects."""
         head = self.head
-        tensors = [head.cv2[i](feats[i]) for i in range(head.nl)]
-        tensors += [head.cv3[i](feats[i]) for i in range(head.nl)]
+        boxes, classes, coefficients = self.branches
+        tensors = [boxes[i](feats[i]) for i in range(head.nl)]
+        tensors += [classes[i](feats[i]) for i in range(head.nl)]
         if self.masks:
-            tensors += [head.cv4[i](feats[i]) for i in range(head.nl)]
-            tensors.append(head.proto(feats[0]))
+            tensors += [coefficients[i](feats[i]) for i in range(head.nl)]
+            tensors.append(proto_tensor(head, feats))
         return tensors
 
     def __enter__(self):
@@ -110,6 +119,46 @@ class RawHead:
         return False
 
 
+def head_branches(head) -> tuple:
+    """The three branches a prediction actually comes out of.
+
+    YOLO26 heads are end2end, and carry two complete sets. ``cv2``/``cv3``/
+    ``cv4`` are the one2many branch: supervision during training, and the first
+    thing ``fuse()`` deletes for inference. What ``Detect.forward`` runs to
+    produce a prediction is ``one2one_cv2``/``one2one_cv3``, and for a
+    segmentation head ``one2one_cv4`` as well.
+
+    They have identical shapes, which is what makes this worth a function.
+    Exporting the wrong one produces an ONNX that checks out, compiles, loads
+    on the board and quietly detects worse than the model it was built from.
+    """
+    if getattr(head, "one2one_cv2", None) is not None:
+        return (
+            head.one2one_cv2,
+            head.one2one_cv3,
+            getattr(head, "one2one_cv4", None),
+        )
+    return (
+        getattr(head, "cv2", None),
+        getattr(head, "cv3", None),
+        getattr(head, "cv4", None),
+    )
+
+
+def proto_tensor(head, feats: list):
+    """The prototype masks, from whichever Proto module the head carries.
+
+    YOLO26's ``Proto26`` refines and sums all three levels, so it takes the
+    whole list. The older ``Proto`` takes the finest level on its own. Both are
+    called ``proto``, so the module is asked which it is: handing the list to
+    the old one indexes a tensor by 1 and reports a size that has nothing to do
+    with the mistake.
+    """
+    if hasattr(head.proto, "feat_refine"):
+        return head.proto(feats)
+    return head.proto(feats[0])
+
+
 def mask_channels(head) -> int:
     """How many mask coefficients a head emits, or 0 when it emits none.
 
@@ -120,7 +169,7 @@ def mask_channels(head) -> int:
     rather than of the file name, because a ``-seg`` in the name is not what
     makes it one.
     """
-    if not (hasattr(head, "cv4") and hasattr(head, "proto")):
+    if head_branches(head)[2] is None or getattr(head, "proto", None) is None:
         return 0
     return int(getattr(head, "nm", 0))
 
@@ -136,13 +185,18 @@ def check_head(net) -> tuple[int, int, int]:
         RuntimeError: When the head is not a three-level YOLO26 head.
     """
     head = getattr(net, "model", [None])[-1]
-    for attribute in ("nl", "nc", "cv2", "cv3"):
+    for attribute in ("nl", "nc"):
         if not hasattr(head, attribute):
             raise RuntimeError(
                 f"this is not a YOLO detection or segmentation model: its head "
                 f"is {type(head).__name__},\n  which has no {attribute}. Pose "
                 "and OBB heads have a different box decoder."
             )
+    if any(branch is None for branch in head_branches(head)[:2]):
+        raise RuntimeError(
+            f"this head has no box or class branch to export: {type(head).__name__} "
+            "has neither\n  cv2/cv3 nor one2one_cv2/one2one_cv3."
+        )
     if head.nl != len(BBOX_OUTPUTS):
         raise RuntimeError(
             f"this head has {head.nl} levels and the board's decoder is built "
@@ -204,6 +258,30 @@ def legacy_exporter_kwargs(torch) -> dict:
     return {"dynamo": False} if "dynamo" in accepted else {}
 
 
+def export_failure(exc: Exception, head) -> RuntimeError:
+    """An export that died inside the model, with the frame it died in.
+
+    Tracing runs the network, so a mistake in the head arrives as whatever
+    torch raised at the bottom of it: ``index 1 is out of bounds for dimension
+    0 with size 1`` names neither the module nor the line. The last frame does,
+    and it is the one worth printing.
+    """
+    import traceback
+
+    frames = traceback.extract_tb(exc.__traceback__)
+    where = ""
+    if frames:
+        frame = frames[-1]
+        where = (
+            f"\n  at {Path(frame.filename).name}:{frame.lineno} in {frame.name}"
+            f"\n    {(frame.line or '').strip()}"
+        )
+    return RuntimeError(
+        f"the export failed inside the model: {type(exc).__name__}: {exc}"
+        f"\n  its head is {type(head).__name__}.{where}"
+    )
+
+
 def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
                 opset: int = DEFAULT_OPSET) -> dict[str, tuple[int, ...]]:
     """Write ``weights`` out as a raw-head ONNX at ``out``.
@@ -237,17 +315,20 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
 
     out.parent.mkdir(parents=True, exist_ok=True)
     dummy = torch.zeros(1, 3, imgsz, imgsz)
-    with RawHead(net), torch.no_grad():
-        torch.onnx.export(
-            net,
-            dummy,
-            str(out),
-            input_names=[INPUT_NAME],
-            output_names=list(wanted),
-            opset_version=opset,
-            do_constant_folding=True,
-            **legacy_exporter_kwargs(torch),
-        )
+    try:
+        with RawHead(net), torch.no_grad():
+            torch.onnx.export(
+                net,
+                dummy,
+                str(out),
+                input_names=[INPUT_NAME],
+                output_names=list(wanted),
+                opset_version=opset,
+                do_constant_folding=True,
+                **legacy_exporter_kwargs(torch),
+            )
+    except Exception as exc:
+        raise export_failure(exc, net.model[-1]) from exc
 
     got = onnx_output_shapes(out)
     wrong = {
