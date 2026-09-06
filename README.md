@@ -23,9 +23,13 @@ instance segmentation, fall detection and more: one pipeline, no setup step. Nee
 [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10
 or later.
 
-[Quickstart](#quickstart) &nbsp;·&nbsp; [Your own footage](#your-own-footage) &nbsp;·&nbsp;
-[Your own model](#your-own-model) &nbsp;·&nbsp; [Moving files](#moving-files) &nbsp;·&nbsp;
-[Flags](#flags) &nbsp;·&nbsp; [Environment](#environment)
+- [Quickstart](#quickstart)
+- [Your own footage](#your-own-footage)
+- [What each app takes](#what-each-app-takes)
+- [Your own model](#your-own-model)
+- [Moving files](#moving-files)
+- [Shared flags](#shared-flags)
+- [Environment](#environment)
 
 ## Quickstart
 
@@ -50,7 +54,7 @@ them needs no login and no `sima-cli`.
 | `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
 
 <details>
-<summary>🎨 &nbsp;<b>Instance segmentation</b> &mdash; per-pixel masks, with an optional blur</summary>
+<summary>🎨 &nbsp;<b>Instance segmentation</b> &nbsp;·&nbsp; per-pixel masks, with an optional blur</summary>
 
 <br>
 
@@ -63,7 +67,7 @@ sima-vision segment --blur --keep-classes person
 </details>
 
 <details>
-<summary>🚨 &nbsp;<b>Fall detection</b> &mdash; tracks people, with optional email alerts</summary>
+<summary>🚨 &nbsp;<b>Fall detection</b> &nbsp;·&nbsp; tracks people, with optional email alerts</summary>
 
 <br>
 
@@ -93,6 +97,45 @@ remux, not a re-encode: every coded bit survives and a 13 MB clip takes about a 
 
 H.264 video only either way. A fragmented `.mp4`, or one holding something else, is
 refused by name rather than failing halfway through a run.
+
+## What each app takes
+
+Every app takes the [shared flags](#shared-flags). These are the ones that belong to one
+app only.
+
+**`detect`** has none of its own. Boxes, labels and confidence, driven entirely by the
+shared flags.
+
+**`segment`**
+
+| Flag | What it does |
+|:--|:--|
+| `--blur` / `--no-blur` | Blur the background and keep instances sharp, or draw a plain overlay |
+| `--blur-method` | `gaussian`, `pixelate` or `none`. Default `gaussian` |
+| `--blur-strength PX` | Gaussian kernel width at 1080p. Default `41` |
+| `--keep-classes CLASS...` | Names or ids that stay sharp. Default: every detected class |
+| `--anonymise` | Blur the instances instead of the background. With `--keep-classes person`, blurs people and leaves the scene |
+| `--mask-threshold T` | Mask cut-off as a probability. Default `0.5`; lower grows instances |
+| `--no-masks` | Blur around plain boxes instead. Needs no segment head |
+| `--minimal` | Pull frames and do nothing else. Tells a slow app apart from a stalled graph |
+
+**`fall`**
+
+| Flag | What it does |
+|:--|:--|
+| `--classes CLASS...` | Classes that can fall. Default `person` |
+| `--confirm S` | How long a fall signal must hold before it counts. Default `1.5` |
+| `--no-fall` | Track without judging falls, which is how you tune tracking first |
+| `--alert-to EMAIL...` | Recipients. Implies `--alerts` |
+| `--alert-from EMAIL` | From address |
+| `--alerts` | Enable alerts. Still a dry run until `--send` |
+| `--send` | Actually connect to the SMTP server |
+| `--smtp-host` / `--smtp-port` / `--smtp-user` | Server, port (`587` STARTTLS, `465` SSL), login |
+| `--site NAME` | Camera name, used in the alert subject and body |
+| `--test-alert` | Send one fake alert and exit. Proves the SMTP settings without a fall, or a board |
+
+The SMTP password is read from `$FALL_ALERT_SMTP_PASSWORD` and from nowhere else, never
+from a config file.
 
 ## Your own model
 
@@ -144,11 +187,11 @@ sima-cli install ghcr:sima-neat/sdk:v2.0.0    # 10-15 minutes, once
 A new Ubuntu shell starts *outside* the venv, so `sima-cli` goes missing until you
 `source` it again. `(sima)` at the front of the prompt is the tell.
 
-**5. Convert.** `--workspace` is the folder that shows up inside the container, so put
-your `.pt` there first:
+**5. Convert.** `--workspace` is the folder that shows up inside the container, so run
+this from the directory holding your `.pt`:
 
 ```bash
-sima-cli sdk setup --workspace ~/workspace
+sima-cli sdk setup --workspace .
 sima-cli sdk model                   # opens the Model SDK shell
 ```
 
@@ -209,9 +252,10 @@ sima-vision pull --into results/
 sima-vision push my-clip.h264
 ```
 
-## Flags
+## Shared flags
 
-`sima-vision <command> --help` lists the rest.
+Every app takes these. `sima-vision <command> --help` lists the rest, including the
+per-app flags above.
 
 | Flag | What it does |
 |:--|:--|
