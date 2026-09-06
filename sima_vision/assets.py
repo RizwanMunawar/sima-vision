@@ -28,6 +28,7 @@ never touches the network; only :meth:`Task.run
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -45,9 +46,15 @@ ASSETS_ENV = "SIMA_VISION_ASSETS"
 #: a plain GET: no login, no `sima-cli`, and the same code path for both kinds.
 SAMPLE_RELEASE = "https://github.com/RizwanMunawar/sima-vision/releases/download/0.0.1"
 
+#: Clips on the release, by name. Two of these were missing from this table for
+#: a while and naming either of them got you "source file not found" for a file
+#: sitting on the very release this app downloads from -- which is what
+#: `published_assets` now catches regardless of what is written here.
 SAMPLE_VIDEOS = {
-    "people-walking-outside-mall.h264": "1920x1080 @ 24 fps, 13 MB. The usual default",
+    "people-walking-outside-mall.h264": "1920x1080 @ 24 fps, 13.3 MB. The usual default",
     "people-walking-inside-mall.h264": "1920x1080 @ 30 fps, 1.2 MB. Quicker smoke test",
+    "people-walking-in-street.mp4": "5.4 MB. Reframed to Annex-B on first use",
+    "people-walking-small.mp4": "3.4 MB. The quickest thing here to try",
 }
 
 #: Model packs on that same release, by size. Nano is the default: 20 MB
@@ -58,10 +65,10 @@ SAMPLE_VIDEOS = {
 #: The detection packs carry a ``-b1`` batch suffix and the segmentation packs
 #: do not. That asymmetry is in the published filenames, not a mistake here.
 RELEASE_MODELS = {
-    "yolo26n-det-bf16-mla_tess-b1.tar.gz": "nano detection, 20 MB",
-    "yolo26n-seg-bf16-mla_tess.tar.gz": "nano segmentation, 23 MB",
-    "yolo26s-det-bf16-mla_tess-b1.tar.gz": "small detection, 35 MB",
-    "yolo26s-seg-bf16-mla_tess.tar.gz": "small segmentation, 39 MB",
+    "yolo26n-det-bf16-mla_tess-b1.tar.gz": "nano detection, 21 MB",
+    "yolo26n-seg-bf16-mla_tess.tar.gz": "nano segmentation, 24 MB",
+    "yolo26s-det-bf16-mla_tess-b1.tar.gz": "small detection, 37 MB",
+    "yolo26s-seg-bf16-mla_tess.tar.gz": "small segmentation, 41 MB",
 }
 
 #: SHA-256 of every release asset, straight from the GitHub API.
@@ -172,9 +179,77 @@ def release_url(name: str) -> str:
     return f"{SAMPLE_RELEASE}/{name}"
 
 
+#: The same release, as the API rather than as a download path. Asked only when
+#: a name is not in the tables above, so the usual run makes no API call.
+RELEASE_API = (
+    "https://api.github.com/repos/RizwanMunawar/sima-vision/releases/tags/"
+    + SAMPLE_RELEASE.rsplit("/", 1)[1]
+)
+
+#: Filled in by :func:`published_assets` on the first miss, so a run asks once.
+_published: frozenset[str] | None = None
+
+
+def published_assets() -> frozenset[str]:
+    """Every file name on the release, or an empty set if it cannot be asked.
+
+    The tables in this module are the fast path and the documentation: they let
+    ``--validate`` stay offline and they say what each pack is for. What they
+    cannot do is stay right. Four clips were on the release and two were listed,
+    so naming either of the other two got you "source file not found" for a file
+    sitting on the very release this app downloads from.
+
+    So a name that is not in a table is not refused until the release itself has
+    been asked. Failure here is not an error -- no network, rate limited, a
+    private repository -- it just means the answer is the tables alone.
+    """
+    global _published
+    if _published is not None:
+        return _published
+    names: set[str] = set()
+    try:
+        with urllib.request.urlopen(RELEASE_API, timeout=15) as response:  # noqa: S310
+            payload = json.load(response)
+        names = {asset["name"] for asset in payload.get("assets", [])}
+    except Exception:  # noqa: BLE001 - any failure means "the tables alone"
+        pass
+    _published = frozenset(names)
+    return _published
+
+
 def on_release(name: str) -> bool:
-    """Whether this archive can be fetched without a login."""
+    """Whether this archive is a documented pack, by the table alone.
+
+    Deliberately offline. :func:`fetchable` is the one that may ask the release.
+    """
     return name in RELEASE_MODELS
+
+
+def worth_asking(path: Path) -> bool:
+    """Whether a missing path could be a release asset at all.
+
+    A bare filename is someone naming a published file: `--model
+    yolo26s-det-bf16-mla_tess-b1.tar.gz`. So is anything already pointing into
+    our own assets directory, which is where the defaults live.
+
+    ``nowhere/mine.h264`` is neither. It is someone's own file, missing, and the
+    honest answer is the error `check_source_file` gives -- not a round trip to
+    GitHub first to confirm what the path already says.
+    """
+    return path.parent == Path() or path.parent in {videos_dir(), models_dir()}
+
+
+def fetchable(path: Path, table: dict) -> bool:
+    """Whether this missing file can be downloaded from the release.
+
+    The table answers instantly and covers everything documented. Only a name it
+    does not know, on a path that could plausibly be published, is worth asking
+    the release itself -- which is how a file that is genuinely there but not
+    yet tabulated gets fetched instead of refused.
+    """
+    if path.name in table:
+        return True
+    return worth_asking(path) and path.name in published_assets()
 
 
 def model_url(task: str) -> str:
@@ -367,10 +442,20 @@ def ensure_source(uri: str, source_type: str = "video", step=None) -> str:
     if path.exists():
         say(step, f"have  {uri}  ({human_bytes(path.stat().st_size)})")
         return uri
-    # A default, or a path the user wrote that happens to name a sample clip.
-    if path.name in SAMPLE_VIDEOS:
-        fetch(f"{SAMPLE_RELEASE}/{path.name}", path, "sample clip", step)
-    return uri
+    # A default, a clip named by hand, or anything else the release publishes.
+    # Falling through to "not found" for a file the app could have fetched in
+    # two seconds is the kind of unhelpful that is worth one API call to avoid.
+    if not fetchable(path, SAMPLE_VIDEOS):
+        return uri
+    if path.parent != Path():
+        fetch(release_url(path.name), path, "sample clip", step)
+        return uri
+    # A bare name lands in assets/videos rather than wherever the shell happens
+    # to be, which is what makes `--source people-walking-small.mp4` do the
+    # obvious thing. as_posix keeps the string the shape the config uses.
+    out = videos_dir() / path.name
+    fetch(release_url(path.name), out, "sample clip", step)
+    return out.as_posix()
 
 
 def ensure_model(path: str, task: str, step=None) -> str:
@@ -399,9 +484,10 @@ def ensure_model(path: str, task: str, step=None) -> str:
     # need no login at all. Naming one by its bare filename lands it in
     # assets/models rather than wherever the shell happened to be, which is what
     # makes `--model yolo26s-det-bf16-mla_tess-b1.tar.gz` do the obvious thing.
-    if on_release(target.name):
+    if fetchable(target, RELEASE_MODELS):
         out = target if target.parent != Path() else models_dir() / target.name
-        return str(fetch(release_url(target.name), out, "model pack", step))
+        fetch(release_url(target.name), out, "model pack", step)
+        return str(out)
 
     entry = CATALOGUE.get(task)
     if entry is None or target.name != entry.model_file:

@@ -27,7 +27,11 @@ def here(tmp_path, monkeypatch):
 
 @pytest.fixture
 def offline(monkeypatch):
-    """Serve four bytes for any URL, and return the list of URLs asked for."""
+    """Serve four bytes for any URL, and return the list of URLs asked for.
+
+    Also clears the cached release listing. It is a module global, so one test
+    that fills it would answer for every test after it.
+    """
     asked: list[str] = []
 
     class Response:
@@ -53,6 +57,7 @@ def offline(monkeypatch):
     # Four bytes cannot hash to a published digest, and these tests are about
     # the decision rather than the transfer. Verification has its own tests.
     monkeypatch.setattr(assets, "RELEASE_SHA256", {})
+    monkeypatch.setattr(assets, "_published", None)
     return asked
 
 
@@ -491,3 +496,90 @@ def test_a_length_the_server_does_not_give_is_still_accepted(here, monkeypatch):
     monkeypatch.setattr(assets.urllib.request, "urlopen", lambda *a, **k: NoLength())
     assert assets.download("https://example.com/clip.h264", Path("a.h264")) is True
     assert Path("a.h264").read_bytes() == b"payload"
+
+
+# -- a name the release has but the tables do not --
+
+
+def test_a_name_only_the_release_knows_is_still_fetched(here, offline, monkeypatch):
+    """The tables drift. The release is what actually decides.
+
+    Four clips were published and two were listed here, so naming either of the
+    other two got "source file not found" for a file sitting on the very release
+    this app downloads from.
+    """
+    monkeypatch.setattr(assets, "SAMPLE_VIDEOS", {})
+    monkeypatch.setattr(
+        assets, "published_assets", lambda: frozenset({"people-walking-small.mp4"})
+    )
+    uri = assets.ensure_source("people-walking-small.mp4")
+    assert uri == "assets/videos/people-walking-small.mp4", "a bare name lands in assets"
+    assert Path(uri).is_file()
+    assert offline == [f"{assets.SAMPLE_RELEASE}/people-walking-small.mp4"]
+
+
+def test_a_model_only_the_release_knows_is_still_fetched(here, offline, monkeypatch):
+    monkeypatch.setattr(assets, "RELEASE_MODELS", {})
+    monkeypatch.setattr(
+        assets, "published_assets", lambda: frozenset({"yolo26x-det-bf16.tar.gz"})
+    )
+    path = assets.ensure_model("yolo26x-det-bf16.tar.gz", "detect")
+    assert Path(path).is_file()
+    assert offline == [f"{assets.SAMPLE_RELEASE}/yolo26x-det-bf16.tar.gz"]
+
+
+def test_someone_elses_path_is_not_looked_up(here, offline, monkeypatch):
+    """`nowhere/mine.h264` is a missing file of theirs, not a published name.
+
+    Asking GitHub about it costs a round trip to confirm what the path already
+    says, and the error `check_source_file` gives is the better answer anyway.
+    """
+    def refuse():
+        raise AssertionError("must not ask the release about a path like this")
+
+    monkeypatch.setattr(assets, "published_assets", refuse)
+    assert assets.ensure_source("nowhere/mine.h264") == "nowhere/mine.h264"
+    assert not offline
+
+
+def test_our_own_assets_directory_is_worth_asking_about(monkeypatch):
+    """The defaults live there, so a name under it could well be published."""
+    monkeypatch.setenv(assets.ASSETS_ENV, "assets")
+    assert assets.worth_asking(Path("clip.h264")) is True
+    assert assets.worth_asking(assets.videos_dir() / "clip.h264") is True
+    assert assets.worth_asking(assets.models_dir() / "pack.tar.gz") is True
+    assert assets.worth_asking(Path("nowhere/mine.h264")) is False
+
+
+def test_a_release_that_cannot_be_asked_is_not_an_error(monkeypatch):
+    """No network, rate limited, private repo: the tables are then the answer."""
+    def boom(url, timeout=0):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr(assets, "_published", None)
+    monkeypatch.setattr(assets.urllib.request, "urlopen", boom)
+    assert assets.published_assets() == frozenset()
+
+
+def test_the_release_is_asked_once_per_run(monkeypatch):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, *_a):
+            return b'{"assets": [{"name": "a.tar.gz"}]}'
+
+    def urlopen(url, timeout=0):
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(assets, "_published", None)
+    monkeypatch.setattr(assets.urllib.request, "urlopen", urlopen)
+    assert assets.published_assets() == frozenset({"a.tar.gz"})
+    assert assets.published_assets() == frozenset({"a.tar.gz"})
+    assert len(calls) == 1, "the listing is cached for the process"
