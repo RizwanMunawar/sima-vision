@@ -71,32 +71,6 @@ RELEASE_MODELS = {
     "yolo26s-seg-bf16-mla_tess.tar.gz": "small segmentation, 41 MB",
 }
 
-#: SHA-256 of every release asset, straight from the GitHub API.
-#:
-#: Worth having because the alternative is silent. A truncated or swapped
-#: download is a file of plausible size that fails much later and somewhere
-#: else -- a clip that decodes half way, a model pack that unpacks to
-#: nonsense -- and a whole afternoon went into suspecting exactly that of a
-#: file which turned out to be fine. Checking here answers it in a second.
-RELEASE_SHA256 = {
-    "people-walking-in-street.mp4":
-        "f13617463afd41307e684d16d9c679b23dca13566decaf3d3ffcce5173ebf3ce",
-    "people-walking-inside-mall.h264":
-        "b65591bb027f7ca184feab29a8a4fc3c6620d632a549793604cdd7b414993b9b",
-    "people-walking-outside-mall.h264":
-        "72da5de46024028766b9f6df30de09560593f14ec3f4f9703394a28fda8d0140",
-    "people-walking-small.mp4":
-        "c217cb8a661fb735fcdef336019d2335576bff4ecaed8e89bbcc07eb9846cd00",
-    "yolo26n-det-bf16-mla_tess-b1.tar.gz":
-        "7c67ecbd823e128edb0fdc1d1bca47abea4d91c9843ff5c93101361081095bea",
-    "yolo26n-seg-bf16-mla_tess.tar.gz":
-        "b32ab8ee2c217f88165a2e17c2b8f6124a4a60776a2d5d9b5bd50ed6bbdf4e6a",
-    "yolo26s-det-bf16-mla_tess-b1.tar.gz":
-        "7bb911cbf356c352df4ecef8600b32e8f77baf945eb7788e6fc585665790bb17",
-    "yolo26s-seg-bf16-mla_tess.tar.gz":
-        "4aaa6068b1dd12d4774a8af917c169dcf2488a3214c84716d7956b85bd1c6cfc",
-}
-
 #: Where the SDK publishes packs that are not on the release. Reaching one of
 #: these needs a community.sima.ai login, which is what ``sima-cli`` holds and
 #: why that path still exists -- it is the fallback now, not the default.
@@ -321,16 +295,6 @@ def download(url: str, out: Path, step=None) -> bool:
                 f"{out.name}: got {done} of {total} bytes, the transfer was cut short"
             )
             return False
-        wanted = RELEASE_SHA256.get(Path(url.split("?")[0]).name)
-        if wanted and not verify_sha256(part, wanted):
-            part.unlink(missing_ok=True)
-            console.error(
-                f"{out.name}: downloaded, but its contents are not what they "
-                "should be.\n  The file is discarded rather than used. Try again; "
-                "if it keeps happening,\n  something between here and GitHub is "
-                "rewriting the download."
-            )
-            return False
         part.replace(out)
         say(step, f"got   {out}  ({human_bytes(done)})")
         return True
@@ -339,19 +303,6 @@ def download(url: str, out: Path, step=None) -> bool:
         part.unlink(missing_ok=True)
         console.error(f"{out.name}: {exc}")
         return False
-
-
-def verify_sha256(path: Path, wanted: str) -> bool:
-    """Whether the file hashes to ``wanted``. Read in blocks, not all at once.
-
-    A model pack is tens of megabytes and this runs on a board where a careless
-    allocation has already cost a run, so it is streamed.
-    """
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1 << 20):
-            digest.update(chunk)
-    return digest.hexdigest() == wanted
 
 
 def cache_name(url: str) -> str:

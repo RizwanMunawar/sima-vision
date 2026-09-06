@@ -219,6 +219,61 @@ def compile_recipe(pack: Path) -> str:
         return handle.read().decode("utf-8") if handle else ""
 
 
+#: Where a finished pack lands, relative to the build directory the recipe is
+#: given. The archived scripts all end by writing `<name>_mpk.tar.gz`.
+PACK_GLOB = "**/*.tar.gz"
+
+
+def run_recipe(recipe: Path, onnx: Path, build_dir: Path,
+               timeout: int = 3600) -> Path:
+    """Run a pack's own compile script on an ONNX, and return the pack it built.
+
+    The script is SiMa's, shipped inside the pack for exactly this, and it takes
+    ``--model`` and ``--build-dir``. Running it rather than reimplementing it is
+    the point: the settings that matter -- bfloat16, MSE calibration, the MLA
+    tessellation layouts -- are the ones that produced a pack known to work, and
+    a paraphrase of them would drift the first time SiMa changed one.
+
+    Args:
+        recipe: The ``archived_compile_script.*.py`` written beside the ONNX.
+        onnx: The raw-head ONNX to compile.
+        build_dir: Where the recipe should put its output.
+        timeout: Seconds to allow. Quantization is slow, so this is generous.
+
+    Returns:
+        The pack the recipe produced.
+
+    Raises:
+        RuntimeError: When the recipe fails, or finishes without a pack.
+    """
+    import subprocess
+    import sys
+
+    before = {p.resolve() for p in build_dir.glob(PACK_GLOB)}
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, str(recipe), "--model", str(onnx),
+         "--build-dir", str(build_dir)],
+        cwd=recipe.parent, check=False, capture_output=True,
+        text=True, encoding="utf-8", errors="replace", timeout=timeout,
+    )
+    made = sorted(
+        (p for p in build_dir.glob(PACK_GLOB) if p.resolve() not in before),
+        key=lambda p: p.stat().st_mtime,
+    )
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout or "").strip().splitlines()[-6:]
+        raise RuntimeError(
+            f"the compile recipe exited {result.returncode}.\n  "
+            + "\n  ".join(tail)
+        )
+    if not made:
+        raise RuntimeError(
+            f"the recipe finished but produced no .tar.gz under {build_dir}.\n"
+            "  Its output is above; the pack is what this was for."
+        )
+    return made[-1]
+
+
 def model_sdk_present() -> bool:
     """Whether the SiMa Model SDK can be imported here."""
     import importlib.util

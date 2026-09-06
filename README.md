@@ -130,18 +130,24 @@ Train a YOLO26 detector, then, **on your PC** (not the DevKit):
 sima-vision compile best.pt
 ```
 
-That exports the raw-head ONNX the board's box decoder reads &mdash; six tensors,
-`bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled `[1, 84, 8400]` &mdash; and
-copies the compile recipe out of a published pack beside it. Needs `pip install
-ultralytics`.
+**Inside the Palette container that is the whole conversion**: it exports the ONNX, then
+runs the SiMa Model SDK on it and writes `build/best_mpk.tar.gz`.
 
-The second half, ONNX to `.tar.gz`, is the SiMa Model SDK: bfloat16 quantization, MLA
-tessellation and the ELF. That lives in the Palette container on x86, so `compile` hands
-you the ONNX, the recipe and the two commands rather than failing at the last step. Then:
+Two halves are happening. The export produces the raw-head ONNX the board's box decoder
+reads &mdash; six tensors, `bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled
+`[1, 84, 8400]` &mdash; and needs `pip install ultralytics`. The compile is bfloat16
+quantization, MLA tessellation and the ELF, which is the Model SDK's job, and it runs the
+recipe a published pack shipped rather than a paraphrase of it.
+
+**Anywhere else**, the SDK is not importable and the ONNX is as far as the machine goes.
+`compile` then hands you the ONNX, the recipe and the commands to finish in Palette,
+rather than failing at the last step.
+
+Either way, the pack ends up on the board the same way:
 
 ```bash
-sima-vision push my-model.tar.gz
-sima-vision detect --model my-model.tar.gz
+sima-vision push build/best_mpk.tar.gz
+sima-vision detect --model best_mpk.tar.gz
 ```
 
 A URL works too, and is cached under `assets/models`:

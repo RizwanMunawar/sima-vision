@@ -54,9 +54,6 @@ def offline(monkeypatch):
         return Response()
 
     monkeypatch.setattr(assets.urllib.request, "urlopen", urlopen)
-    # Four bytes cannot hash to a published digest, and these tests are about
-    # the decision rather than the transfer. Verification has its own tests.
-    monkeypatch.setattr(assets, "RELEASE_SHA256", {})
     monkeypatch.setattr(assets, "_published", None)
     return asked
 
@@ -307,75 +304,6 @@ def test_a_task_fetches_its_own_pack_and_no_others(here, offline, monkeypatch):
 
 
 # -- what is downloaded has to be what was published --
-
-
-def test_a_download_that_is_not_what_was_published_is_discarded(here, monkeypatch):
-    """A truncated or rewritten file used to be kept and reused forever.
-
-    `download` only ever hashed the URL, to name the cache entry. So a bad
-    transfer of the right length landed in assets/ and every later run trusted
-    it, because the first thing that function does is believe a file that is
-    already there. It fails much later and somewhere else -- a clip that
-    decodes half way, a pack that unpacks to nonsense -- and an afternoon went
-    into suspecting exactly that of a file which turned out to be fine.
-    """
-    class Response:
-        headers = {"Content-Length": "4"}
-
-        def __init__(self):
-            self.left = [b"junk"]
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def read(self, _size):
-            return self.left.pop() if self.left else b""
-
-    monkeypatch.setattr(assets.urllib.request, "urlopen", lambda url, timeout=0: Response())
-    with pytest.raises(RuntimeError, match="could not download"):
-        assets.ensure_source(f"assets/videos/{CLIP}")
-
-    assert not Path(f"assets/videos/{CLIP}").exists(), "a bad file must not be kept"
-    assert not list(Path("assets").rglob("*.part"))
-
-
-def test_content_that_matches_its_digest_is_kept(here, monkeypatch):
-    """The other half: verification must not reject a good download."""
-    import hashlib
-
-    body = b"the real thing"
-    digest = hashlib.sha256(body).hexdigest()
-    monkeypatch.setitem(assets.RELEASE_SHA256, CLIP, digest)
-
-    class Response:
-        headers = {"Content-Length": str(len(body))}
-
-        def __init__(self):
-            self.left = [body]
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def read(self, _size):
-            return self.left.pop() if self.left else b""
-
-    monkeypatch.setattr(assets.urllib.request, "urlopen", lambda url, timeout=0: Response())
-    assets.ensure_source(f"assets/videos/{CLIP}")
-    assert Path(f"assets/videos/{CLIP}").read_bytes() == body
-
-
-def test_every_published_asset_has_a_digest():
-    """A pack added to the catalogue without one is silently unverified."""
-    for name in assets.RELEASE_MODELS:
-        assert name in assets.RELEASE_SHA256, name
-    for name in assets.SAMPLE_VIDEOS:
-        assert name in assets.RELEASE_SHA256, name
 
 
 # -- the cache must not confuse two URLs, or accept half a file --

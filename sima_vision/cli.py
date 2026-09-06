@@ -49,6 +49,7 @@ from .export import (
     export_onnx,
     model_sdk_present,
     next_steps,
+    run_recipe,
 )
 from .neat import describe_preprocess
 from .runloop import Stopper
@@ -411,11 +412,16 @@ def run_compile(args) -> int:
 
     with console.step("Compiling the DevKit pack", "compile") as step:
         recipe_path = write_recipe(out_dir, step)
-        if not model_sdk_present():
+        if not model_sdk_present() or recipe_path is None:
             console.warn(next_steps(onnx_path, recipe_path))
             step.done("ONNX ready, compile it in Palette")
             return 0
-        step.done("the Model SDK is here; run the recipe above on the ONNX")
+        step.note("quantizing and tessellating. This takes a few minutes.")
+        pack = run_recipe(recipe_path, onnx_path, out_dir)
+        step.done(f"{pack} ({human_bytes(pack.stat().st_size)})")
+
+    console.report(f"run it with:  sima-vision detect --model {pack.name}")
+    console.report(f"send it over: sima-vision push {pack}")
     return 0
 
 
