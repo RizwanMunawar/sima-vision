@@ -95,8 +95,7 @@ Output lands beside the run, on the board. Name the board once and neither comma
 `--host`:
 
 ```bash
-export SIMA_VISION_DEVKIT=sima@<devkit-ip>      # Linux, macOS
-$env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"      # Windows PowerShell
+$env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"
 ```
 
 ```bash
@@ -127,41 +126,45 @@ No path and no URL: a published name is downloaded into `assets/models` and reus
 Train a YOLO26 detector, then convert it **inside the Palette Model SDK container** --
 that is where the compiler lives, and it is four commands to get there.
 
-> [!IMPORTANT]
-> **Docker has to be installed and running on your PC first.** Palette *is* a set of
-> Docker containers, so `sima-cli sdk` has nothing to start without it. Get
-> [Docker Desktop](https://docs.docker.com/get-started/get-docker/) on Windows or macOS,
-> or Docker Engine on Linux.
->
-> **On Windows, install WSL2 first.** Docker Desktop runs its containers on the WSL2
-> backend, so it will not start without one, and `sima-cli` belongs in that Linux side
-> too. In PowerShell as Administrator:
->
-> ```powershell
-> wsl --install -d Ubuntu
-> wsl -l -v                  # want: Ubuntu, Running, 2
-> ```
->
-> Then turn on **Settings > Resources > WSL integration** for that distribution in Docker
-> Desktop, and check the whole path from inside Ubuntu:
->
-> ```bash
-> docker run hello-world     # must print "Hello from Docker!"
-> ```
->
-> None of this is needed to *run* models, only to compile one. Everything above works
-> with no Docker and no WSL at all.
+Everything here happens in WSL, not in PowerShell: Palette is a set of Docker
+containers, Docker Desktop runs them on the WSL2 backend, and `sima-cli` drives both from
+the Linux side.
 
-```bash
-# On your PC, once: mount the folder holding best.pt into the SDK containers
-sima-cli sdk setup --workspace ~/workspace
+**1. WSL2 and Docker.** In PowerShell as Administrator:
 
-# Then, any time: open the Model SDK shell
-sima-cli sdk model
+```powershell
+wsl --install -d Ubuntu
+wsl -l -v                  # want: Ubuntu, Running, 2
 ```
 
+Install [Docker Desktop](https://docs.docker.com/get-started/get-docker/), then turn on
+**Settings > Resources > WSL integration** for Ubuntu. Everything after this runs
+**inside Ubuntu**:
+
 ```bash
-# Inside that shell, in ~/workspace
+docker run hello-world     # must print "Hello from Docker!"
+```
+
+**2. sima-cli, in WSL.** It needs a virtualenv; Ubuntu refuses a bare `pip install`:
+
+```bash
+sudo apt update && sudo apt install -y python3-venv python3-pip
+python3 -m venv ~/sima && source ~/sima/bin/activate
+pip install sima-cli
+sima-cli login             # needs a community.sima.ai account
+```
+
+**3. The Model SDK container.** `--workspace` is the folder that appears inside it, so
+put `best.pt` there:
+
+```bash
+sima-cli sdk setup --workspace ~/workspace
+sima-cli sdk model         # opens the Model SDK shell
+```
+
+**4. Convert.** Inside that shell, in `~/workspace`:
+
+```bash
 pip install sima-vision ultralytics
 sima-vision compile best.pt          # -> build/best_mpk.tar.gz
 ```
@@ -172,13 +175,15 @@ That is the whole conversion. It exports the raw-head ONNX the board's box decod
 ELF, using the compile recipe a published pack shipped rather than a paraphrase of it.
 
 > [!NOTE]
-> **The compiler is x86-only.** It is the `afe` package, and it exists only in that
-> container: not on the DevKit, not on a plain laptop, and not installable next to this.
-> `python -c "import afe"` says which side of the line you are on. Run `compile`
-> anywhere else and you get the ONNX plus the steps to finish &mdash; never a crash at
-> the last one.
+> **None of step 1 to 4 is needed to run a model, only to compile one.** Everything
+> earlier in this README works with no Docker and no WSL.
 >
-> If `sima-cli sdk model` is not there, the Model Compiler extension was declined during
+> The compiler is the `afe` package and exists only in that container -- not on the
+> DevKit, not in PowerShell. `python -c "import afe"` says which side of the line you
+> are on, and `compile` run anywhere else gives you the ONNX plus the steps to finish
+> rather than a crash at the last one.
+>
+> If `sima-cli sdk model` is missing, the Model Compiler extension was declined during
 > setup. Re-run `sima-cli sdk setup` and accept it; it is a 9 GB download.
 
 Either way, the pack ends up on the board the same way:
