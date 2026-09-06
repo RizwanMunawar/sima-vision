@@ -250,6 +250,12 @@ sandbox/
 **/frames/
 **/alerts/
 
+# Trained weights. These are someone's own training run, often tens of
+# megabytes, and `sima-vision compile` is pointed at them where they already
+# are -- there is no reason for one to arrive here.
+*.pt
+*.onnx
+
 # Terminal captures
 logs.txt
 *.log

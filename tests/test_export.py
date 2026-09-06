@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -233,3 +234,11 @@ def test_a_pack_that_was_already_there_is_not_claimed_as_new(tmp_path):
     (build / "stale_mpk.tar.gz").write_bytes(b"old")
     with pytest.raises(RuntimeError, match="no .tar.gz"):
         export.run_recipe(make_recipe(tmp_path, "pass"), tmp_path / "x.onnx", build)
+
+
+def test_the_guidance_names_the_module_it_looked_for():
+    """"Not importable here" is only actionable if it says what and where."""
+    text = export.next_steps(Path("build/best-raw.onnx"), None)
+    assert "afe" in text, "name the module, so it can be checked"
+    assert "Palette" in text and "x86" in text
+    assert "not on the DevKit" in text, "the board cannot do this half"

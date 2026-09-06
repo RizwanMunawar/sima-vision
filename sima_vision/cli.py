@@ -38,7 +38,7 @@ import tarfile
 from pathlib import Path
 
 from . import __version__
-from .assets import models_dir
+from .assets import default_model_path, ensure_model, models_dir
 from .bootstrap import detect_environment, ensure_runtime
 from .console import console, human_bytes
 from .devkit import DEVKIT_ENV, run_pull, run_push
@@ -411,11 +411,21 @@ def run_compile(args) -> int:
         step.done(f"{onnx_path} ({human_bytes(onnx_path.stat().st_size)})")
 
     with console.step("Compiling the DevKit pack", "compile") as step:
-        recipe_path = write_recipe(out_dir, step)
-        if not model_sdk_present() or recipe_path is None:
+        # The two halves fail for different reasons and want different answers,
+        # so they are asked separately. Collapsed into one branch, a machine
+        # that was simply missing a recipe read as one that could never compile.
+        if not model_sdk_present():
+            recipe_path = write_recipe(out_dir, step)
+            step.done("stopped at the ONNX: no `afe` module, so no Model SDK here")
             console.warn(next_steps(onnx_path, recipe_path))
-            step.done("ONNX ready, compile it in Palette")
             return 0
+
+        recipe_path = write_recipe(out_dir, step, fetch_if_missing=True)
+        if recipe_path is None:
+            step.done("stopped at the ONNX: no pack to take a compile recipe from")
+            console.warn(next_steps(onnx_path, None))
+            return 0
+
         step.note("quantizing and tessellating. This takes a few minutes.")
         pack = run_recipe(recipe_path, onnx_path, out_dir)
         step.done(f"{pack} ({human_bytes(pack.stat().st_size)})")
@@ -425,14 +435,30 @@ def run_compile(args) -> int:
     return 0
 
 
-def write_recipe(out_dir: Path, step) -> Path | None:
+def write_recipe(out_dir: Path, step, fetch_if_missing: bool = False) -> Path | None:
     """Copy a published pack's own compile script next to the ONNX.
 
     Taken from a pack rather than written here, because the settings that
     matter -- bfloat16, MSE calibration, the MLA tessellation layouts -- are
     the ones SiMa actually shipped, and a paraphrase of them would drift.
+
+    Args:
+        out_dir: Where the recipe is written, beside the ONNX.
+        step: The console step to report under.
+        fetch_if_missing: Download a pack when there is none to read. Only the
+            caller that is about to compile asks for this: it is a 21 MB
+            download for a file inside it, which is worth it to finish the job
+            and not worth it on a machine that was going to stop anyway.
     """
     packs = sorted(models_dir().glob("*.tar.gz"))
+    if not packs and fetch_if_missing:
+        # Every pack carries the same recipe, so the smallest one will do.
+        step.detail("no pack here to take a recipe from, fetching the nano one")
+        try:
+            ensure_model(default_model_path("detect"), "detect", step)
+        except RuntimeError as exc:
+            step.note(str(exc))
+        packs = sorted(models_dir().glob("*.tar.gz"))
     if not packs:
         step.note(
             "no model pack here to copy a recipe from. Any real run fetches one,\n"
