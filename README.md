@@ -27,7 +27,7 @@ or later.
 - [Your own footage](#your-own-footage)
 - [Your own model](#your-own-model)
 - [Moving files](#moving-files)
-- [Flags](#flags)
+- [Apps arguments](#apps-arguments)
 - [Environment](#environment)
 
 ## Quickstart
@@ -257,7 +257,7 @@ sima-vision pull --into results/
 sima-vision push my-clip.h264
 ```
 
-## Flags
+## Apps arguments
 
 Every flag, and which apps take it. `sima-vision <app> --help` prints the same list.
 

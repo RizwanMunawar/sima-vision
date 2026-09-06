@@ -306,7 +306,7 @@ def test_the_flags_table_lists_every_flag():
     }
 
     text = README.read_text(encoding="utf-8")
-    table = text[text.index("## Flags"):text.index("## Environment")]
+    table = text[text.index("## Apps arguments"):text.index("## Environment")]
     documented = set(re.findall(r"`(--[a-z][a-z0-9-]*)", table))
 
     missing = sorted(real - documented)
