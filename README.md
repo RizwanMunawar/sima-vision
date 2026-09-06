@@ -24,10 +24,9 @@ instance segmentation, fall detection and more: one pipeline, no setup step. Nee
 or later.
 
 - [Quickstart](#quickstart)
-- [Your own footage](#your-own-footage)
+- [Apps arguments](#apps-arguments)
 - [Your own model](#your-own-model)
 - [Moving files](#moving-files)
-- [Apps arguments](#apps-arguments)
 - [Environment](#environment)
 
 ## Quickstart
@@ -80,182 +79,19 @@ you can see what would have gone out.
 
 </details>
 
-## Your own footage
-
-A path or an `https` URL. Raw H.264 and `.mp4` both work.
+Your own video works the same way, as a path or an `https` URL:
 
 ```bash
 sima-vision push my-clip.mp4
 sima-vision detect --source my-clip.mp4
 ```
 
-The board decodes H.264 in hardware, and a container hits a demuxer bug in Neat 0.3.0, so
-an `.mp4` is reframed into a raw stream on the first run and cached beside it. That is a
-remux, not a re-encode: every coded bit survives and a 13 MB clip takes about a second. No
-`ffmpeg` needed, which matters because the DevKit has none.
-
-H.264 video only either way. A fragmented `.mp4`, or one holding something else, is
-refused by name rather than failing halfway through a run.
-
-## Your own model
-
-Trained a YOLO26 detector or segmenter? It has to be compiled into a `.tar.gz` pack before
-the board can run it, and that is one command once the toolchain is in place.
-
-> [!IMPORTANT]
-> **This is the only place Docker and WSL come into it, and both live on your PC.**
-> [Quickstart](#quickstart) needs neither: a pretrained model on the DevKit really is
-> those two commands. Nothing in this section runs on the board.
-
-<details>
-<summary>🧠 &nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b> &nbsp;·&nbsp; six steps, about 30 minutes the first time</summary>
-
-<br>
-
-The compiler is the `afe` package, and it exists only inside the Palette Model SDK
-container. That is x86 Docker, which on Windows means WSL2.
-
-**What you need before starting**
-
-- Windows with virtualization enabled, or any x86 Linux (skip to step 4)
-- a [community.sima.ai](https://community.sima.ai) account, for `sima-cli login`
-- roughly 10 GB of disk for the SDK image
-- your trained `best.pt`
-
-### 1. WSL2
-
-In PowerShell, as Administrator:
-
-```powershell
-wsl --install -d Ubuntu
-wsl -l -v
-```
-
-- want `Ubuntu`, state `Running`, version `2`
-- a reboot may be needed the first time
-- already have a distribution? `wsl -l -v` alone is enough to check it is version 2
-
-### 2. Docker Desktop
-
-Install [Docker Desktop](https://docs.docker.com/get-started/get-docker/), then:
-
-- open **Settings → Resources → WSL integration**
-- switch it on for Ubuntu
-
-Skip that toggle and `docker` works in PowerShell but is missing inside Ubuntu, which is
-where it is needed.
-
-### 3. Go into Ubuntu
-
-Everything from here on is typed in that shell. `exit` comes back to PowerShell.
-
-```powershell
-wsl -d Ubuntu
-```
-
-```bash
-docker run hello-world
-```
-
-- must print `Hello from Docker!`
-- `permission denied` on the socket means the WSL integration toggle in step 2 was missed
-- `command not found` means the same
-
-### 4. sima-cli
-
-Ubuntu refuses a bare `pip install` with `externally-managed-environment`, so it goes in a
-virtualenv:
-
-```bash
-sudo apt update && sudo apt install -y python3-venv python3-pip
-python3 -m venv ~/sima
-source ~/sima/bin/activate
-pip install sima-cli
-sima-cli login
-sima-cli install ghcr:sima-neat/sdk:v2.0.0
-```
-
-- `source ~/sima/bin/activate` is Linux, inside WSL. There is no PowerShell equivalent
-- a new shell starts *outside* the venv, so `sima-cli` goes missing until you `source` it
-  again. `(sima)` at the front of the prompt is the tell
-- the last line pulls several GB and takes 10 to 15 minutes. Once per machine
-
-### 5. Convert
-
-`--workspace` is the folder that shows up inside the container, so run this from the
-directory holding your `.pt`:
-
-```bash
-sima-cli sdk setup --workspace .  # First time this could take 10-15 minutes
-sima-cli sdk model
-```
-
-- `sdk setup` runs once and is remembered
-- `sdk model` opens the Model SDK shell, and is what you come back to
-
-Inside that shell:
-
-```bash
-pip install sima-vision ultralytics
-sima-vision compile best.pt
-```
-
-Out comes `build/best_mpk.tar.gz`. That one command is the whole conversion:
-
-- exports the raw-head ONNX the board's box decoder reads, which is six tensors,
-  `bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled `[1, 84, 8400]`
-- quantizes to bfloat16 and tessellates for the MLA
-- emits the ELF and packs it, using the compile recipe a published pack shipped rather
-  than a paraphrase of it
-
-### 6. Run it
-
-Back on the board:
-
-```bash
-sima-vision push build/best_mpk.tar.gz
-sima-vision detect --model best_mpk.tar.gz
-```
-
-A URL works too, cached under `assets/models`:
-
-```bash
-sima-vision detect --model https://example.com/my-model.tar.gz
-```
-
-</details>
-
-<details>
-<summary>🩹 &nbsp;<b>When it does not go to plan</b></summary>
-
-<br>
-
-- **`sima-cli sdk model` is missing.** The Model Compiler extension was declined during
-  setup. Re-run `sima-cli sdk setup` and accept it. It is a 9 GB download.
-- **`compile` produced only an ONNX.** The Model SDK is not importable where you ran it.
-  `python -c "import afe"` says which side of the line you are on. Inside the Model SDK
-  shell it does every step; anywhere else it hands you the ONNX and the steps to finish,
-  rather than crashing at the last one.
-- **Every detection is noise.** The head is not YOLO26. Say so with `--family`. Get it
-  wrong and the box decoder reads the output tensor the wrong way, which is garbage
-  rather than an error.
-
-</details>
-
-## Moving files
-
-Output lands beside the run, on the board. Name the board once and neither command needs
-`--host`:
-
-```powershell
-$env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"
-```
-
-```bash
-sima-vision pull                     # everything the run left
-sima-vision pull --into results/
-sima-vision push my-clip.h264
-```
+H.264 only, but the container does not matter. The board decodes H.264 in hardware and
+`.mp4` hits a demuxer bug in Neat 0.3.0, so an `.mp4` is reframed into a raw stream on
+first use and cached beside it. That is a remux, not a re-encode: every coded bit
+survives, a 13 MB clip takes about a second, and no `ffmpeg` is involved, which matters
+because the DevKit has none. Anything that is not H.264 is refused by name rather than
+failing halfway through a run.
 
 ## Apps arguments
 
@@ -318,6 +154,108 @@ Every flag, and which apps take it. `sima-vision <app> --help` prints the same l
 
 A `config.yaml` in the working directory is picked up on its own. Flags beat it, and it
 beats the built-in defaults.
+
+## Your own model
+
+Trained a YOLO26 detector or segmenter? It has to be compiled into a `.tar.gz` pack before
+the board can run it, and that is one command once the toolchain is in place.
+
+> [!IMPORTANT]
+> **This is the only place Docker and WSL come into it, and both live on your PC.**
+> [Quickstart](#quickstart) needs neither: a pretrained model on the DevKit really is
+> those two commands. Nothing in this section runs on the board.
+
+<details>
+<summary>🧠 &nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b> &nbsp;·&nbsp; six steps, about 30 minutes the first time</summary>
+
+<br>
+
+The compiler is the `afe` package, and it lives only inside the Palette Model SDK
+container: x86 Docker, which on Windows means WSL2. You will need a
+[community.sima.ai](https://community.sima.ai) account and about 10 GB of disk.
+
+**1. WSL2.** PowerShell, as Administrator. Want `Ubuntu`, `Running`, version `2`:
+
+```powershell
+wsl --install -d Ubuntu
+wsl -l -v
+```
+
+**2. Docker Desktop.** [Install it](https://docs.docker.com/get-started/get-docker/), then
+switch on **Settings → Resources → WSL integration** for Ubuntu. Skip that and `docker`
+works in PowerShell but is missing inside Ubuntu, which is where it is needed.
+
+**3. Into Ubuntu.** Everything below is typed there; `exit` comes back.
+
+```powershell
+wsl -d Ubuntu
+```
+
+```bash
+docker run hello-world               # must print "Hello from Docker!"
+```
+
+**4. sima-cli.** Ubuntu refuses a bare `pip install`, so it goes in a virtualenv. The last
+line pulls several GB, once per machine:
+
+```bash
+sudo apt update && sudo apt install -y python3-venv python3-pip
+python3 -m venv ~/sima
+source ~/sima/bin/activate           # Linux, inside WSL. No PowerShell equivalent
+pip install sima-cli
+sima-cli login
+sima-cli install ghcr:sima-neat/sdk:v2.0.0
+```
+
+A new shell starts *outside* the venv, so `sima-cli` goes missing until you `source` it
+again. `(sima)` in the prompt is the tell.
+
+**5. Convert.** `--workspace` is the folder that appears inside the container, so run this
+from the directory holding your `.pt`:
+
+```bash
+sima-cli sdk setup --workspace .
+sima-cli sdk model                   # opens the Model SDK shell, and is what you return to
+```
+
+```bash
+pip install sima-vision ultralytics
+sima-vision compile best.pt          # -> build/best_mpk.tar.gz
+```
+
+That one command exports the raw-head ONNX the board's box decoder reads, quantizes to
+bfloat16, tessellates for the MLA and emits the ELF, using the compile recipe a published
+pack shipped rather than a paraphrase of it.
+
+**6. Run it.** Back on the board:
+
+```bash
+sima-vision push build/best_mpk.tar.gz
+sima-vision detect --model best_mpk.tar.gz
+```
+
+A URL works too, cached under `assets/models`:
+
+```bash
+sima-vision detect --model https://example.com/my-model.tar.gz
+```
+
+</details>
+
+## Moving files
+
+Output lands beside the run, on the board. Name the board once and neither command needs
+`--host`:
+
+```powershell
+$env:SIMA_VISION_DEVKIT="sima@<devkit-ip>"
+```
+
+```bash
+sima-vision pull                     # everything the run left
+sima-vision pull --into results/
+sima-vision push my-clip.h264
+```
 
 ## Environment
 

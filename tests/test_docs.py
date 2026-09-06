@@ -305,8 +305,13 @@ def test_the_flags_table_lists_every_flag():
         if option.startswith("--")
     }
 
+    # Sliced to the next heading, not a named one: the sections have been
+    # reordered twice, and a hard-coded end anchor silently swallowed whichever
+    # section had moved in between, along with every flag it mentioned.
     text = README.read_text(encoding="utf-8")
-    table = text[text.index("## Apps arguments"):text.index("## Environment")]
+    start = text.index("## Apps arguments")
+    end = text.index(chr(10) + "## ", start + 1)
+    table = text[start:end]
     documented = set(re.findall(r"`(--[a-z][a-z0-9-]*)", table))
 
     missing = sorted(real - documented)
