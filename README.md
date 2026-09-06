@@ -18,11 +18,10 @@
 
 </div>
 
-**Live YOLO26 on the MLA of a SiMa.ai Modalix DevKit 3.0.** Object detection, instance
-segmentation and fall detection: three apps, one pipeline, no setup step.
+**Computer visionm applications on SiMa.ai Modalix DevKit 3.0.** Object detection, instance
+segmentation fall detection and many more: one pipeline, no setup step.
 
-Needs a [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10 or later. Everything below runs **on the
-board** unless it says otherwise.
+Needs a [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10 or later. Everything below runs **on the board** unless it says otherwise.
 
 ## Quickstart
 
