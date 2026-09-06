@@ -283,3 +283,33 @@ def test_the_version_is_written_in_exactly_one_place():
     found = _re.findall(r'(?m)^__version__ = "(.*)"$', init)
     assert found == [__version__], f"expected one __version__ line, got {found}"
     assert _re.fullmatch(r"\d+\.\d+\.\d+([ab]\d+|rc\d+)?", __version__), __version__
+
+
+def test_the_flags_table_lists_every_flag():
+    """The README promises "every flag", so it has to be every flag.
+
+    It was three tables before, one shared and one per app, and the shared one
+    held seven of thirty-two. A reader had no way to know which was the case.
+    """
+    subparsers = [
+        action.choices
+        for action in build_parser()._actions
+        if isinstance(getattr(action, "choices", None), dict)
+    ][0]
+    real = {
+        option
+        for task in TASKS
+        for action in subparsers[task]._actions
+        if action.dest != "help"
+        for option in action.option_strings
+        if option.startswith("--")
+    }
+
+    text = README.read_text(encoding="utf-8")
+    table = text[text.index("## Flags"):text.index("## Environment")]
+    documented = set(re.findall(r"`(--[a-z][a-z0-9-]*)", table))
+
+    missing = sorted(real - documented)
+    assert not missing, f"the flags table is missing: {missing}"
+    invented = sorted(documented - real)
+    assert not invented, f"the flags table lists flags that do not exist: {invented}"

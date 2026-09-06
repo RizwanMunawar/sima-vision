@@ -25,15 +25,14 @@ or later.
 
 - [Quickstart](#quickstart)
 - [Your own footage](#your-own-footage)
-- [What each app takes](#what-each-app-takes)
 - [Your own model](#your-own-model)
 - [Moving files](#moving-files)
-- [Shared flags](#shared-flags)
+- [Flags](#flags)
 - [Environment](#environment)
 
 ## Quickstart
 
-On the DevKit. No Docker, no WSL, no login.
+On the DevKit. No Docker, no WSL.
 
 ```bash
 sima-cli login
@@ -97,45 +96,6 @@ remux, not a re-encode: every coded bit survives and a 13 MB clip takes about a 
 
 H.264 video only either way. A fragmented `.mp4`, or one holding something else, is
 refused by name rather than failing halfway through a run.
-
-## What each app takes
-
-Every app takes the [shared flags](#shared-flags). These are the ones that belong to one
-app only.
-
-**`detect`** has none of its own. Boxes, labels and confidence, driven entirely by the
-shared flags.
-
-**`segment`**
-
-| Flag | What it does |
-|:--|:--|
-| `--blur` / `--no-blur` | Blur the background and keep instances sharp, or draw a plain overlay |
-| `--blur-method` | `gaussian`, `pixelate` or `none`. Default `gaussian` |
-| `--blur-strength PX` | Gaussian kernel width at 1080p. Default `41` |
-| `--keep-classes CLASS...` | Names or ids that stay sharp. Default: every detected class |
-| `--anonymise` | Blur the instances instead of the background. With `--keep-classes person`, blurs people and leaves the scene |
-| `--mask-threshold T` | Mask cut-off as a probability. Default `0.5`; lower grows instances |
-| `--no-masks` | Blur around plain boxes instead. Needs no segment head |
-| `--minimal` | Pull frames and do nothing else. Tells a slow app apart from a stalled graph |
-
-**`fall`**
-
-| Flag | What it does |
-|:--|:--|
-| `--classes CLASS...` | Classes that can fall. Default `person` |
-| `--confirm S` | How long a fall signal must hold before it counts. Default `1.5` |
-| `--no-fall` | Track without judging falls, which is how you tune tracking first |
-| `--alert-to EMAIL...` | Recipients. Implies `--alerts` |
-| `--alert-from EMAIL` | From address |
-| `--alerts` | Enable alerts. Still a dry run until `--send` |
-| `--send` | Actually connect to the SMTP server |
-| `--smtp-host` / `--smtp-port` / `--smtp-user` | Server, port (`587` STARTTLS, `465` SSL), login |
-| `--site NAME` | Camera name, used in the alert subject and body |
-| `--test-alert` | Send one fake alert and exit. Proves the SMTP settings without a fall, or a board |
-
-The SMTP password is read from `$FALL_ALERT_SMTP_PASSWORD` and from nowhere else, never
-from a config file.
 
 ## Your own model
 
@@ -226,7 +186,7 @@ sima-cli install ghcr:sima-neat/sdk:v2.0.0
 directory holding your `.pt`:
 
 ```bash
-sima-cli sdk setup --workspace .
+sima-cli sdk setup --workspace .  # First time this could take 10-15 minutes
 sima-cli sdk model
 ```
 
@@ -297,20 +257,64 @@ sima-vision pull --into results/
 sima-vision push my-clip.h264
 ```
 
-## Shared flags
+## Flags
 
-Every app takes these. `sima-vision <command> --help` lists the rest, including the
-per-app flags above.
+Every flag, and which apps take it. `sima-vision <app> --help` prints the same list.
 
-| Flag | What it does |
-|:--|:--|
-| `--frames 200` | Stop after N frames. The quickest way to try something |
-| `--conf 0.5` | Raise the confidence floor. Default `0.30` |
-| `--no-video` / `--no-save` | Skip the recording or the stills |
-| `--quiet` | Warnings, errors and the closing report only |
-| `--profile` | Per-stage timings, when a run is slower than it should be |
-| `--model my.tar.gz` | Your own compiled pack instead of the fetched one |
-| `--validate` | Resolve and check the settings, then stop. Needs no board |
+| Flag | Apps | What it does |
+|:--|:--|:--|
+| `--source`, `-s URI` | all | File, `https` URL, RTSP URL, or empty for the sample clip |
+| `--source-type` | all | `video`, `rtsp` or `usb`. Default `video` |
+| `--fps N` | all | Source frame rate. Default `0`, read from the stream |
+| `--width PX` | all | Source width. Default `0`, read from the stream's SPS |
+| `--height PX` | all | Source height. Default `0`, read from the stream's SPS |
+| `--model`, `-m PATH` | all | Compiled pack, or an `https` URL to one. Empty fetches this app's default |
+| `--labels PATH` | all | Newline-separated class names. Defaults to the packaged COCO list |
+| `--family NAME` | all | Detection head. Must match the model or every box is noise |
+| `--conf T` | all | Minimum confidence. Default `0.30` |
+| `--iou T` | all | Non-max suppression IoU. Default `0.60` |
+| `--max-det N` | all | Top-K cap per frame. Default `50` |
+| `--frames`, `-n N` | all | Stop after N frames. Default `0`, runs until interrupted |
+| `--timeout MS` | all | How long to wait for a frame before giving up. Default `20000` |
+| `--video-path PATH` | all | Where the annotated recording is written |
+| `--no-video` | all | Do not record |
+| `--save-dir DIR` | all | Where annotated stills are written |
+| `--save-every N` | all | Write every Nth still. Default `10`; `0` disables |
+| `--no-save` | all | Do not write stills |
+| `--no-hud` | all | Leave the frame-rate badge off the overlay |
+| `--insight` | all | Stream to Neat Insight over UDP. Off by default |
+| `--insight-host HOST` | all | Insight address as the board sees it. Default `127.0.0.1` |
+| `--config`, `-c PATH` | all | Config file. Defaults to `./config.yaml` |
+| `--no-config` | all | Ignore any config file and use defaults plus these flags |
+| `--validate` | all | Resolve and check the settings, then stop. Needs no board |
+| `--quiet`, `-q` | all | Warnings, errors and the closing report only |
+| `--profile` | all | Per-stage timings, when a run is slower than it should be |
+| `--queue-depth N` | all | Neat's own queue depth. Every slot holds a decoded frame, so raising it makes a starved run worse. Default `1` |
+| `--sink-queue-depth N` | all | Finished frames that may wait for the recorder. Host memory only. Default `12` |
+| `--sink-queue-mb MB` | all | Memory budget for that backlog, which grows it to fit a known clip |
+| `--output-buffers N` | all | Buffers each public output may hold. Default `1` |
+| `--decoder-buffers N` | all | Buffers to ask the decoder for. Default `0`, sized from the stream's reference frames |
+| `--segment-frames N` | all | Frames per piece when a clip is too long for one decode. Default `150`; `0` runs it whole |
+| `--blur` / `--no-blur` | `segment` | Blur the background and keep instances sharp, or draw a plain overlay |
+| `--blur-method` | `segment` | `gaussian`, `pixelate` or `none`. Default `gaussian` |
+| `--blur-strength PX` | `segment` | Gaussian kernel width at 1080p. Default `41` |
+| `--keep-classes CLASS...` | `segment` | Names or ids that stay sharp. Default: every detected class |
+| `--anonymise`, `--anonymize` | `segment` | Blur the instances instead of the background |
+| `--mask-threshold T` | `segment` | Mask cut-off as a probability. Default `0.5`; lower grows instances |
+| `--no-masks` | `segment` | Blur around plain boxes instead. Needs no segment head |
+| `--minimal` | `segment` | Pull frames and do nothing else. Tells a slow app from a stalled graph |
+| `--classes CLASS...` | `fall` | Classes that can fall. Default `person` |
+| `--confirm S` | `fall` | How long a fall signal must hold before it counts. Default `1.5` |
+| `--no-fall` | `fall` | Track without judging falls, which is how you tune tracking first |
+| `--alert-to EMAIL...` | `fall` | Recipients. Implies `--alerts` |
+| `--alert-from EMAIL` | `fall` | From address |
+| `--alerts` | `fall` | Enable alerts. Still a dry run until `--send` |
+| `--send` | `fall` | Actually connect to the SMTP server |
+| `--smtp-host HOST` | `fall` | SMTP server. Default `smtp.gmail.com` |
+| `--smtp-port PORT` | `fall` | `587` for STARTTLS, `465` for SSL. Default `587` |
+| `--smtp-user USER` | `fall` | SMTP login. The password comes from `$FALL_ALERT_SMTP_PASSWORD` and nowhere else |
+| `--site NAME` | `fall` | Camera name, used in the alert subject and body |
+| `--test-alert` | `fall` | Send one fake alert and exit. Proves the SMTP settings without a fall, or a board |
 
 A `config.yaml` in the working directory is picked up on its own. Flags beat it, and it
 beats the built-in defaults.
