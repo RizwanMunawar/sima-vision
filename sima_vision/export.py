@@ -159,7 +159,7 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
         ) from exc
 
     net = YOLO(str(weights)).model.eval()
-    levels, classes = check_head(net)
+    _, classes = check_head(net)
     wanted = expected_shapes(imgsz, classes)
 
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -55,9 +55,6 @@ from .runloop import Stopper
 from .runtime import FAMILY_DECODE_TOKENS
 from .tasks import TASKS
 
-#: environment, pyneat, imaging, assets, source, model, pipeline.
-RUN_STEPS = 7
-
 EPILOG = """\
 examples:
   sima-vision detect                       the sample clip and model, fetched for you
@@ -396,14 +393,13 @@ def collect_overrides(args: argparse.Namespace) -> dict:
 def run_compile(args) -> int:
     """``compile`` -- export, then compile if the Model SDK is here."""
     console.banner(f"sima-vision {__version__}", "compile")
-    console.plan(2)
     weights = Path(args.weights)
     if not weights.is_file():
         raise SystemExit(f"no such file: {weights}")
 
     out_dir = Path(args.out)
     onnx_path = out_dir / f"{weights.stem}-raw.onnx"
-    with console.step("export", f"{weights.name} -> raw-head ONNX") as step:
+    with console.step(f"Exporting {weights.name} to ONNX", "export") as step:
         step.note(
             "the board decodes boxes itself, so the head's six raw tensors are exported\n"
             "rather than ultralytics' assembled [1, 84, 8400] output"
@@ -413,7 +409,7 @@ def run_compile(args) -> int:
             step.detail(f"{name:<16} {tuple(shape)}")
         step.done(f"{onnx_path} ({human_bytes(onnx_path.stat().st_size)})")
 
-    with console.step("compile", "ONNX -> DevKit pack") as step:
+    with console.step("Compiling the DevKit pack", "compile") as step:
         recipe_path = write_recipe(out_dir, step)
         if not model_sdk_present():
             console.warn(next_steps(onnx_path, recipe_path))
@@ -493,9 +489,8 @@ def run_task(args) -> int:
     if early is not None:
         return early
 
-    console.plan(RUN_STEPS)
     console.banner(f"sima-vision {__version__}", task.name)
-    with console.step("environment", "checking this machine") as step:
+    with console.step("Checking the environment", "check") as step:
         env = detect_environment()
         step.done(env.summary())
     ensure_runtime(env)

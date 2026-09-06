@@ -210,13 +210,13 @@ def parse_chunk_offsets(stbl: bytes, start: int, end: int) -> list[int]:
     """Chunk offsets from ``stco``, or ``co64`` on a file over 4 GB."""
     box = find_box(stbl, (b"stco",), start, end)
     if box is not None:
-        body, stop = box
+        body, _ = box
         count = struct.unpack_from(">I", stbl, body + 4)[0]
         return list(struct.unpack_from(f">{count}I", stbl, body + 8))
     box = find_box(stbl, (b"co64",), start, end)
     if box is None:
         raise RuntimeError("sample table has neither stco nor co64")
-    body, stop = box
+    body, _ = box
     count = struct.unpack_from(">I", stbl, body + 4)[0]
     return list(struct.unpack_from(f">{count}Q", stbl, body + 8))
 

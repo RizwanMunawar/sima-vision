@@ -347,11 +347,11 @@ class Task:
 
     def build(self, cfg) -> Pipeline:
         """The startup sequence, as three numbered steps. Shared by every task."""
-        with console.step("source", "probing the stream") as step:
+        with console.step("Opening the video", "video") as step:
             geometry = self.open_source(cfg, step)
-        with console.step("model", f"loading {Path(cfg.model_path).name}") as step:
+        with console.step(f"Loading the model {Path(cfg.model_path).name}", "model") as step:
             pipeline = self.load_model(cfg, geometry[0], geometry[1], step)
-        with console.step("pipeline", "building the Neat graph") as step:
+        with console.step("Building the pipeline", "build") as step:
             self.build_pipeline(cfg, pipeline, geometry, step)
         return pipeline
 
@@ -367,7 +367,7 @@ class Task:
         by the time the graph is built the Run holds the MLA, and leaving it
         held makes the *next* launch fail with a busy device.
         """
-        with console.step("assets", "model archive and video source") as step:
+        with console.step("Fetching the model and the video", "assets") as step:
             cfg = ensure_assets(cfg, self.name, step)
             # After the fetch, because the file has to exist to be reframed,
             # and before build(), because everything downstream -- the SPS
@@ -377,7 +377,7 @@ class Task:
             step.done("ready")
         try:
             pipeline = self.build(cfg)
-            console.banner("running", "press Ctrl-C to stop")
+            console.step("Processing video", "run").note("press Ctrl-C to stop")
             geometry = (pipeline.frame_w, pipeline.frame_h, pipeline.fps)
             return run_pipeline(
                 pipeline, cfg, stopper, self.runtime(cfg, pipeline),

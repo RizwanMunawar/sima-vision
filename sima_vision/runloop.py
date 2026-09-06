@@ -448,13 +448,19 @@ def pull_frame(pipeline: Pipeline, cfg, sinks: SinkWorker, label: str, processed
     return None, True, False
 
 
-def source_stopped_message(cfg, pipeline: Pipeline, processed: int,
-                           sink_ms: float = 0.0) -> str:
+def source_stopped_message(cfg, pipeline: Pipeline, processed: int) -> str:
     """Explain a source that went quiet, ruling out what the frame count rules out.
 
     The clip's length is known before the run starts, so "it just ended" is
     either the whole answer or not on the list at all. Saying which turns a
     short recording from something to be interpreted into something decided.
+
+    There used to be a ranked list of causes under this, written while the
+    stall was still a mystery. It is not one any more: the decoder stops around
+    195 frames whatever the sinks, the pool or the GOP are doing, and
+    :mod:`sima_vision.segments` handles it by cutting the clip. Guesses that
+    outlive the thing they were guessing at only send people down the wrong
+    path, so they are gone.
     """
     total = pipeline.source_frames
     if total and processed >= total:
@@ -471,78 +477,14 @@ def source_stopped_message(cfg, pipeline: Pipeline, processed: int,
         f"{tries} times in a row after {processed} frames"
     )
     if total:
-        head += (
-            f", {processed / total:.0%} of the way through a {total} frame clip. "
-            "The source stalled; it did not end."
+        return (
+            f"{head}, {processed / total:.0%} of the way through a {total} frame "
+            "clip. The source stalled; it did not end."
         )
-    else:
-        head += ". If that is far short of the clip, the source stalled rather than ended."
-
-    causes = stall_causes(cfg, pipeline, sink_ms)
-    listed = "\n".join(
-        f"  {n}. {cause}" for n, cause in enumerate(causes, 1)
-    )
     return (
-        f"{head}\nIn order of likelihood:\n{listed}\n"
-        "Run again with --no-save --no-video to tell the graph apart from how much\n"
-        "work this app does per frame: the same stall means the graph, a complete\n"
-        "run means the sinks."
+        f"{head}. If that is far short of the clip, the source stalled rather "
+        "than ended."
     )
-
-
-def stall_causes(cfg, pipeline: Pipeline, sink_ms: float) -> list[str]:
-    """Why the source stopped, most likely first.
-
-    Ordered by what this run actually measured rather than by what is usually
-    true. The sink cost is known -- ``SinkWorker`` times every ``submit`` that
-    had to wait -- and when it dwarfs the frame interval it is not a hypothesis,
-    it is the answer, so it goes first and the generic advice goes below it.
-
-    Causes that cannot apply are left out entirely. Telling someone their
-    Insight feed may have wedged the codec daemon when they never turned Insight
-    on is one more thing to rule out by hand.
-    """
-    interval = 1000.0 / (pipeline.fps or 25)
-    causes: list[str] = []
-
-    if sink_ms > interval:
-        causes.append(
-            f"the sinks cannot keep up. They held the pull loop {sink_ms:.0f} ms per\n"
-            f"     frame against a {interval:.0f} ms frame interval, so the loop was not\n"
-            "     asking for frames and decoded ones piled up between the decoder and\n"
-            "     this app. Drawing and encoding 1080p in software on the board's CPU\n"
-            "     is the usual reason. The sinks need not keep up, they only need to\n"
-            "     stay out of the loop's way, so --sink-queue-mb (host memory\n"
-            "     for the backlog) is the fix that keeps the whole recording,\n"
-            "     and --no-video the one that gives it up.\n"
-            "     Not --queue-depth: that one deepens the runtime's own queues, which\n"
-            "     parks more decoded frames and makes this worse."
-        )
-
-    # Only worth suggesting when there is somewhere to lower it to. The floor is
-    # 1 and so is the default, so on a config nobody has touched this used to
-    # read as "turn down the thing that is already all the way down".
-    room = (
-        f"     Then lower runtime.output_buffers, currently {cfg.output_buffers}, "
-        f"which costs\n     two buffers for every one you take off it."
-        if cfg.output_buffers > 1
-        else "     runtime.output_buffers is already 1, its minimum, so the slack has\n"
-             "     to come from somewhere else."
-    )
-    causes.append(
-        "the hardware decoder ran out of buffers. Its pool is small (the boot log\n"
-        "     prints BufferNum), and every element between it and the source appsink\n"
-        "     can park one. Count the queues in the first pipeline printed above:\n"
-        "     their max-buffers plus the appsink's must stay under BufferNum.\n"
-        f"{room}"
-    )
-
-    if cfg.insight_enable:
-        causes.append(
-            "output.insight.enable is on and its encoder shares the codec daemon\n"
-            "     with the decoder, so it can wedge it. Try again without --insight."
-        )
-    return causes
 
 
 def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
@@ -574,12 +516,7 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
 
         if sample is None:
             if cfg.source_type == "video":
-                console.report(
-                    source_stopped_message(
-                        cfg, pipeline, processed,
-                        sinks.blocked_ms / processed if processed else 0.0,
-                    )
-                )
+                console.report(source_stopped_message(cfg, pipeline, processed))
                 break
             continue
 

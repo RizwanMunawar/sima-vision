@@ -548,8 +548,8 @@ def ensure_runtime(env: Environment | None = None) -> Environment:
     env = env or detect_environment()
     if runtime.pyneat is not None and runtime.cv2 is not None:
         return env
-    with console.step("pyneat", "locating the Neat runtime") as step:
+    with console.step("Loading the Neat runtime", "runtime") as step:
         ensure_pyneat(env, step)
-    with console.step("imaging", "numpy and OpenCV") as step:
+    with console.step("Loading numpy and OpenCV", "imaging") as step:
         ensure_imaging(env, step)
     return env

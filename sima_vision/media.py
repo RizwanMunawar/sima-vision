@@ -763,7 +763,7 @@ def check_source_file(cfg) -> int:
         # Annex-B streams open with a 3 or 4 byte start code. An MP4 carries
         # "ftyp" at offset 4, which is what a rename rather than a convert looks
         # like, and h264parse would simply never produce a frame.
-        annex_b = head.startswith(b"\x00\x00\x00\x01") or head.startswith(b"\x00\x00\x01")
+        annex_b = head.startswith((b"\x00\x00\x00\x01", b"\x00\x00\x01"))
         if not annex_b:
             hint = (
                 " That looks like an MP4 container renamed to .h264."

@@ -20,7 +20,6 @@ from sima_vision.runloop import (
     TaskRuntime,
     run_pipeline,
     source_stopped_message,
-    stall_causes,
     timing_report,
 )
 from sima_vision.sinks import Pipeline
@@ -586,95 +585,6 @@ def stalled_pipeline(fps: int = 24, total: int = 379) -> Pipeline:
     return pipeline
 
 
-def test_the_advice_only_names_flags_that_exist():
-    """It told a `detect` user to run `--minimal`, which only `segment` has.
-
-    Advice that does not parse is worse than none: it costs a run to find out.
-    Every flag this message mentions has to be accepted by every task, since
-    one message is shared by all of them.
-    """
-    import re
-
-    from sima_vision.cli import build_parser
-
-    message = source_stopped_message(stall_config(), stalled_pipeline(), 23, sink_ms=183.0)
-    mentioned = set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]+)", message))
-    assert mentioned, "the message should suggest something"
-
-    # Compared against the option strings rather than parsed: some of these take
-    # a value, and this is asking whether the flag exists, not how to call it.
-    subparsers = [
-        action.choices
-        for action in build_parser()._actions
-        if isinstance(getattr(action, "choices", None), dict)
-    ][0]
-    for task in TASKS:
-        accepted = {
-            option
-            for action in subparsers[task]._actions
-            for option in action.option_strings
-        }
-        unknown = mentioned - accepted
-        assert not unknown, f"the stall advice tells `{task}` to use {sorted(unknown)}"
-
-
-def test_the_run_the_advice_asks_for_is_a_run_the_app_accepts():
-    """The stall advice said `--no-save --no-video`; the config rejected it.
-
-    A stalled run was told to come back with every sink off, because that is
-    the one run that separates a slow app from a stalled graph. Doing as it
-    said got you `ERROR enable at least one of output.save, output.video or
-    output.insight` -- the app refusing its own instructions.
-
-    Checking that the flags *exist* was not enough to catch this, so this asks
-    the stronger question: feed the advice's own switches to the parser and
-    make sure the config they produce is one the app will run.
-    """
-    import re
-
-    from sima_vision.cli import build_parser, collect_overrides
-
-    parser = build_parser()
-    message = source_stopped_message(stall_config(), stalled_pipeline(), 36, sink_ms=117.0)
-    mentioned = set(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]+)", message))
-
-    subparsers = [
-        action.choices
-        for action in parser._actions
-        if isinstance(getattr(action, "choices", None), dict)
-    ][0]
-    # Only the switches: a flag that takes a value cannot be pasted in blind,
-    # and it is the valueless ones the advice actually strings together.
-    switches = sorted(
-        option
-        for action in subparsers["detect"]._actions
-        if action.nargs == 0
-        for option in action.option_strings
-        if option in mentioned
-    )
-    assert switches, "the advice should suggest at least one switch to try"
-
-    args = parser.parse_args(
-        ["detect", *switches, "--model", "m.tar.gz", "--source", "c.h264"]
-    )
-    for task in TASKS:
-        # No raise is the whole assertion: the advice has to be runnable.
-        TASKS[task]().load(None, collect_overrides(args), use_file=False)
-
-
-def test_the_measured_cause_is_ranked_first():
-    """The run timed the sinks. A measurement outranks a hypothesis."""
-    causes = stall_causes(stall_config(), stalled_pipeline(), sink_ms=183.0)
-    assert "sinks cannot keep up" in causes[0]
-    assert "183 ms" in causes[0] and "42 ms" in causes[0]
-
-
-def test_sinks_that_keep_up_are_not_blamed():
-    causes = stall_causes(stall_config(), stalled_pipeline(), sink_ms=2.0)
-    assert not any("cannot keep up" in cause for cause in causes)
-    assert "decoder ran out of buffers" in causes[0]
-
-
 def test_the_two_queue_depths_are_separate_knobs():
     """One setting drove both, and they pull opposite ways.
 
@@ -708,19 +618,6 @@ def test_the_sink_queue_is_the_one_the_worker_gets():
     finally:
         loop.SinkWorker = real
     assert seen["depth"] == 6, "the sink worker must get the sink depth"
-
-
-def test_the_advice_does_not_point_at_the_knob_that_makes_it_worse():
-    """Two knobs, one letter apart, pulling in opposite directions.
-
-    `--sink-queue-mb` grows a backlog of numpy copies in host memory, which is
-    what stops the pull loop waiting on the recorder. `--queue-depth` deepens
-    the runtime's own queues, every slot of which parks a frame checked out of
-    the decoder's eight-buffer pool, so reaching for it makes the stall worse.
-    """
-    causes = stall_causes(stall_config(), stalled_pipeline(), sink_ms=183.0)
-    assert "--sink-queue-mb" in causes[0]
-    assert "Not --queue-depth" in causes[0]
 
 
 def test_a_file_backlog_is_sized_to_the_clip_not_to_a_fixed_depth():
@@ -773,36 +670,6 @@ def test_the_worker_gets_the_grown_depth_not_the_floor():
     finally:
         loop.SinkWorker = real
     assert seen["depth"] == 300, "the backlog should have been sized to the clip"
-
-
-def test_a_setting_already_at_its_floor_is_not_suggested():
-    """`output_buffers` bottoms out at 1, which is also the default.
-
-    The advice read "lower runtime.output_buffers" on a config nobody had
-    touched, which is telling someone to turn down a dial already at zero.
-    """
-    at_floor = stall_causes(stall_config(), stalled_pipeline(), sink_ms=0.0)
-    decoder = next(c for c in at_floor if "decoder ran out" in c)
-    assert "already 1" in decoder
-    assert "Then lower" not in decoder
-
-    raised = stall_causes(
-        stall_config(**{"runtime.output_buffers": 4}), stalled_pipeline(), sink_ms=0.0
-    )
-    decoder = next(c for c in raised if "decoder ran out" in c)
-    assert "currently 4" in decoder
-    assert "already 1" not in decoder
-
-
-def test_insight_is_only_blamed_when_it_is_on():
-    """It was listed unconditionally, so every user had one more thing to rule out."""
-    off = stall_causes(stall_config(), stalled_pipeline(), sink_ms=0.0)
-    assert not any("insight" in cause for cause in off)
-
-    on = stall_causes(
-        stall_config(**{"output.insight.enable": True}), stalled_pipeline(), sink_ms=0.0
-    )
-    assert any("insight" in cause for cause in on)
 
 
 def test_a_complete_run_is_not_called_a_stall():
