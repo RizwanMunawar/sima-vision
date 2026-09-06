@@ -31,7 +31,9 @@ or later.
 
 ## Quickstart
 
-On the DevKit. No Docker, no WSL.
+![on the DevKit](https://img.shields.io/badge/run_on-DevKit-E63946?style=flat-square)
+
+No Docker, no WSL, no login. Every command here is typed on the board.
 
 ```bash
 sima-cli login
@@ -82,8 +84,8 @@ you can see what would have gone out.
 Your own video works the same way, as a path or an `https` URL:
 
 ```bash
-sima-vision push my-clip.mp4
-sima-vision detect --source my-clip.mp4
+sima-vision push my-clip.mp4             # on your PC
+sima-vision detect --source my-clip.mp4  # on the DevKit
 ```
 
 H.264 only, but the container does not matter. The board decodes H.264 in hardware and
@@ -95,7 +97,8 @@ failing halfway through a run.
 
 ## Apps arguments
 
-Every flag, and which apps take it. `sima-vision <app> --help` prints the same list.
+Every flag, and which apps take it. All of them are for the three apps, which run on the
+DevKit. `sima-vision <app> --help` prints the same list.
 
 | Flag | Apps | What it does |
 |:--|:--|:--|
@@ -157,6 +160,8 @@ beats the built-in defaults.
 
 ## Your own model
 
+![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
+
 Trained a YOLO26 detector or segmenter? It has to be compiled into a `.tar.gz` pack before
 the board can run it, and that is one command once the toolchain is in place.
 
@@ -174,7 +179,7 @@ The compiler is the `afe` package, and it lives only inside the Palette Model SD
 container: x86 Docker, which on Windows means WSL2. You will need a
 [community.sima.ai](https://community.sima.ai) account and about 10 GB of disk.
 
-**1. WSL2.** PowerShell, as Administrator. Want `Ubuntu`, `Running`, version `2`:
+**1. WSL2.** PowerShell on your PC, as Administrator. Want `Ubuntu`, `Running`, version `2`:
 
 ```powershell
 wsl --install -d Ubuntu
@@ -214,20 +219,20 @@ again. `(sima)` in the prompt is the tell.
 from the directory holding your `.pt`:
 
 ```bash
-sima-cli sdk setup --workspace .
-sima-cli sdk model                   # opens the Model SDK shell, and is what you return to
+sima-cli sdk setup --workspace .  # could take 15-20 minutes for installation
+activate-model-compiler
 ```
 
 ```bash
 pip install sima-vision ultralytics
-sima-vision compile best.pt          # -> build/best_mpk.tar.gz
+sima-vision compile best.pt          # -> build/best_mpk.tar.gz, could take upto 5 minutes
 ```
 
 That one command exports the raw-head ONNX the board's box decoder reads, quantizes to
 bfloat16, tessellates for the MLA and emits the ELF, using the compile recipe a published
 pack shipped rather than a paraphrase of it.
 
-**6. Run it.** Back on the board:
+**6. Run it.** ![on the DevKit](https://img.shields.io/badge/run_on-DevKit-E63946?style=flat-square)
 
 ```bash
 sima-vision push build/best_mpk.tar.gz
@@ -244,7 +249,9 @@ sima-vision detect --model https://example.com/my-model.tar.gz
 
 ## Moving files
 
-Output lands beside the run, on the board. Name the board once and neither command needs
+![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
+
+Output lands beside the run, on the board, and both commands are typed on your PC. Name the board once and neither command needs
 `--host`:
 
 ```powershell

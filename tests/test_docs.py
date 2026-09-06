@@ -18,6 +18,8 @@ import re
 import shlex
 from pathlib import Path
 
+import pytest
+
 from sima_vision.api import _alias_table
 from sima_vision.cli import build_parser
 from sima_vision.tasks import TASKS
@@ -208,13 +210,26 @@ def test_every_image_exists():
 
 
 def test_no_asset_is_left_unused():
-    """An image nothing shows is dead weight in every clone of the repo."""
+    """An image nothing shows is dead weight in every clone of the repo.
+
+    Asks git what is tracked rather than walking the directory. `assets/models`
+    and `assets/videos` are where a run downloads to, they are gitignored, and a
+    developer who has ever run this locally has a 20 MB model pack sitting
+    there, which is not dead weight in anybody's clone.
+    """
+    import subprocess
+
+    listing = subprocess.run(
+        ["git", "ls-files", "assets"],
+        cwd=REPO, capture_output=True, text=True, check=False,
+    )
+    if listing.returncode != 0:                       # not a checkout
+        pytest.skip("not a git checkout, so nothing to ask about tracked files")
+
     text = README.read_text(encoding="utf-8")
-    unused = [
-        path.relative_to(REPO).as_posix()
-        for path in sorted((REPO / "assets").rglob("*"))
-        if path.is_file() and path.relative_to(REPO).as_posix() not in text
-    ]
+    tracked = [name for name in listing.stdout.split() if name]
+    assert tracked, "assets/ should hold the logo at least"
+    unused = [name for name in tracked if name not in text]
     assert not unused, f"assets/ holds files the README never shows: {unused}"
 
 
