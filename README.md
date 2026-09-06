@@ -140,72 +140,117 @@ from a config file.
 ## Your own model
 
 Trained a YOLO26 detector or segmenter? It has to be compiled into a `.tar.gz` pack before
-the board can run it.
+the board can run it, and that is one command once the toolchain is in place.
 
 > [!IMPORTANT]
 > **This is the only place Docker and WSL come into it, and both live on your PC.**
 > [Quickstart](#quickstart) needs neither: a pretrained model on the DevKit really is
 > those two commands. Nothing in this section runs on the board.
 
+<details>
+<summary>🧠 &nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b> &nbsp;·&nbsp; six steps, about 30 minutes the first time</summary>
+
+<br>
+
 The compiler is the `afe` package, and it exists only inside the Palette Model SDK
 container. That is x86 Docker, which on Windows means WSL2.
 
-**1. WSL2.** In PowerShell as Administrator:
+**What you need before starting**
+
+- Windows with virtualization enabled, or any x86 Linux (skip to step 4)
+- a [community.sima.ai](https://community.sima.ai) account, for `sima-cli login`
+- roughly 10 GB of disk for the SDK image
+- your trained `best.pt`
+
+### 1. WSL2
+
+In PowerShell, as Administrator:
 
 ```powershell
 wsl --install -d Ubuntu
-wsl -l -v                            # want: Ubuntu, Running, 2
+wsl -l -v
 ```
 
-**2. Docker Desktop.** Install [Docker Desktop](https://docs.docker.com/get-started/get-docker/),
-then turn on **Settings → Resources → WSL integration** for Ubuntu. Skip that and `docker`
-works in PowerShell but is missing inside Ubuntu, which is where it is needed.
+- want `Ubuntu`, state `Running`, version `2`
+- a reboot may be needed the first time
+- already have a distribution? `wsl -l -v` alone is enough to check it is version 2
 
-**3. Go into Ubuntu.** Everything below is typed there, not in PowerShell. `exit` comes
-back.
+### 2. Docker Desktop
+
+Install [Docker Desktop](https://docs.docker.com/get-started/get-docker/), then:
+
+- open **Settings → Resources → WSL integration**
+- switch it on for Ubuntu
+
+Skip that toggle and `docker` works in PowerShell but is missing inside Ubuntu, which is
+where it is needed.
+
+### 3. Go into Ubuntu
+
+Everything from here on is typed in that shell. `exit` comes back to PowerShell.
 
 ```powershell
 wsl -d Ubuntu
 ```
 
 ```bash
-docker run hello-world               # must print "Hello from Docker!"
+docker run hello-world
 ```
 
-**4. sima-cli.** Ubuntu refuses a bare `pip install` with `externally-managed-environment`,
-so it goes in a virtualenv:
+- must print `Hello from Docker!`
+- `permission denied` on the socket means the WSL integration toggle in step 2 was missed
+- `command not found` means the same
+
+### 4. sima-cli
+
+Ubuntu refuses a bare `pip install` with `externally-managed-environment`, so it goes in a
+virtualenv:
 
 ```bash
 sudo apt update && sudo apt install -y python3-venv python3-pip
 python3 -m venv ~/sima
-source ~/sima/bin/activate           # Linux, inside WSL. No PowerShell equivalent
+source ~/sima/bin/activate
 pip install sima-cli
 sima-cli login
-sima-cli install ghcr:sima-neat/sdk:v2.0.0    # 10-15 minutes, once
+sima-cli install ghcr:sima-neat/sdk:v2.0.0
 ```
 
-A new Ubuntu shell starts *outside* the venv, so `sima-cli` goes missing until you
-`source` it again. `(sima)` at the front of the prompt is the tell.
+- `source ~/sima/bin/activate` is Linux, inside WSL. There is no PowerShell equivalent
+- a new shell starts *outside* the venv, so `sima-cli` goes missing until you `source` it
+  again. `(sima)` at the front of the prompt is the tell
+- the last line pulls several GB and takes 10 to 15 minutes. Once per machine
 
-**5. Convert.** `--workspace` is the folder that shows up inside the container, so run
-this from the directory holding your `.pt`:
+### 5. Convert
+
+`--workspace` is the folder that shows up inside the container, so run this from the
+directory holding your `.pt`:
 
 ```bash
 sima-cli sdk setup --workspace .
-sima-cli sdk model                   # opens the Model SDK shell
+sima-cli sdk model
 ```
+
+- `sdk setup` runs once and is remembered
+- `sdk model` opens the Model SDK shell, and is what you come back to
+
+Inside that shell:
 
 ```bash
 pip install sima-vision ultralytics
-sima-vision compile best.pt          # -> build/best_mpk.tar.gz
+sima-vision compile best.pt
 ```
 
-That one command is the whole conversion. It exports the raw-head ONNX the board's box
-decoder reads (six tensors, `bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled
-`[1, 84, 8400]`), quantizes to bfloat16, tessellates for the MLA and emits the ELF, using
-the compile recipe a published pack shipped rather than a paraphrase of it.
+Out comes `build/best_mpk.tar.gz`. That one command is the whole conversion:
 
-**6. Run it.** Back on the board:
+- exports the raw-head ONNX the board's box decoder reads, which is six tensors,
+  `bbox_0..2` and `class_logit_0..2`, not ultralytics' assembled `[1, 84, 8400]`
+- quantizes to bfloat16 and tessellates for the MLA
+- emits the ELF and packs it, using the compile recipe a published pack shipped rather
+  than a paraphrase of it
+
+### 6. Run it
+
+Back on the board:
 
 ```bash
 sima-vision push build/best_mpk.tar.gz
@@ -218,22 +263,22 @@ A URL works too, cached under `assets/models`:
 sima-vision detect --model https://example.com/my-model.tar.gz
 ```
 
+</details>
+
 <details>
 <summary>🩹 &nbsp;<b>When it does not go to plan</b></summary>
 
 <br>
 
-**`sima-cli sdk model` is missing.** The Model Compiler extension was declined during
-setup. Re-run `sima-cli sdk setup` and accept it. It is a 9 GB download.
-
-**`compile` produced only an ONNX.** The Model SDK is not importable where you ran it;
-`python -c "import afe"` says which side of the line you are on. Inside the Model SDK
-shell it does every step. Anywhere else it hands you the ONNX and the steps to finish,
-rather than crashing at the last one.
-
-**Every detection is noise.** The head is not YOLO26. Say so with `--family`. Get it
-wrong and the box decoder reads the output tensor the wrong way, which is garbage rather
-than an error.
+- **`sima-cli sdk model` is missing.** The Model Compiler extension was declined during
+  setup. Re-run `sima-cli sdk setup` and accept it. It is a 9 GB download.
+- **`compile` produced only an ONNX.** The Model SDK is not importable where you ran it.
+  `python -c "import afe"` says which side of the line you are on. Inside the Model SDK
+  shell it does every step; anywhere else it hands you the ONNX and the steps to finish,
+  rather than crashing at the last one.
+- **Every detection is noise.** The head is not YOLO26. Say so with `--family`. Get it
+  wrong and the box decoder reads the output tensor the wrong way, which is garbage
+  rather than an error.
 
 </details>
 
