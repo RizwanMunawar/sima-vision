@@ -104,23 +104,6 @@ sima-vision pull --into results/   # ...into a directory of your choosing
 sima-vision push my-clip.h264      # host -> DevKit
 ```
 
-## Use a different model
-
-Two published sizes, fetched by name. Nano is the default; small is more accurate:
-
-| Pack | Size | For |
-|:--|:--|:--|
-| `yolo26n-det-bf16-mla_tess-b1.tar.gz` | 20 MB | `detect`, `fall` &mdash; the default |
-| `yolo26n-seg-bf16-mla_tess.tar.gz` | 23 MB | `segment` &mdash; the default |
-| `yolo26s-det-bf16-mla_tess-b1.tar.gz` | 35 MB | `detect`, `fall` |
-| `yolo26s-seg-bf16-mla_tess.tar.gz` | 39 MB | `segment` |
-
-```bash
-sima-vision detect --model yolo26s-det-bf16-mla_tess-b1.tar.gz
-```
-
-No path and no URL: a published name is downloaded into `assets/models` and reused.
-
 ### Your own model
 
 Train a YOLO26 detector, then convert it **inside the Palette Model SDK container** --
