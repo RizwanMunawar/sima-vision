@@ -15,6 +15,7 @@ from sima_vision.media import (
     BitReader,
     count_h264_pictures,
     count_pictures_in,
+    default_tuned_decoder,
     fps_from_rate,
     is_elementary_h264,
     parse_sps,
@@ -250,7 +251,7 @@ def write_mp4(path, frames=None):
 
 
 def test_an_mp4_source_is_reframed_and_the_config_points_at_the_result(tmp_path):
-    """Neat 0.3.0 cannot demux, so the app stopped and asked for ffmpeg.
+    """Containers used to stop the app and ask for ffmpeg.
 
     A DevKit has no ffmpeg, which made "use your own footage" mean "go and find
     another machine first". The container holds the same H.264 the raw path
@@ -489,3 +490,13 @@ def test_the_sized_pool_silences_the_warning_it_was_added_for(tmp_path):
 
     assert decoder_budget_warning(str(clip), 1920, 1080, cfg.decoder_pool) != ""
     assert decoder_budget_warning(str(clip), 1920, 1080, asked) == ""
+
+
+def test_the_default_tuned_decoder_sets_what_simadecode_drops():
+    """Neat 0.4.0's SimaDecode never writes `decoder-tuning=default`."""
+    fragment = default_tuned_decoder(11)
+    assert "neatdecoder " in fragment
+    assert "decoder-tuning=default" in fragment
+    assert "num-buffers=11" in fragment
+    assert "format=NV12" in fragment
+    assert "num-buffers" not in default_tuned_decoder(0)

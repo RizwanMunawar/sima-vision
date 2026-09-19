@@ -272,7 +272,7 @@ def test_a_working_interpreter_is_never_interfered_with(monkeypatch, unbound):
 
 
 def test_the_venv_goes_ahead_of_the_current_environment(tmp_path, monkeypatch, unbound, capsys):
-    """It holds the numpy<2 pyneat was built against, which has to win."""
+    """It holds the numpy pyneat was built against, which has to win."""
     site = make_venv(tmp_path / "pyneat", THIS)
     monkeypatch.setattr(bootstrap, "PYNEAT_HOMES", (str(tmp_path / "pyneat"),))
     monkeypatch.delitem(sys.modules, "pyneat", raising=False)
@@ -376,7 +376,7 @@ def test_a_pyneat_that_raises_on_import_is_not_fatal(monkeypatch, unbound):
 
 
 def test_a_wheel_left_by_the_sdk_is_found(tmp_path, monkeypatch):
-    wheel = tmp_path / "pyneat-0.3.0-cp311-cp311-linux_aarch64.whl"
+    wheel = tmp_path / "pyneat-0.4.0-cp311-cp311-linux_aarch64.whl"
     wheel.write_bytes(b"PK")
     monkeypatch.setattr(bootstrap, "SEARCH_ROOTS", (str(tmp_path),))
     assert bootstrap.find_pyneat_wheel() == wheel
@@ -384,7 +384,7 @@ def test_a_wheel_left_by_the_sdk_is_found(tmp_path, monkeypatch):
 
 def test_a_wheel_one_level_down_is_found(tmp_path, monkeypatch):
     (tmp_path / "sdk").mkdir()
-    wheel = tmp_path / "sdk" / "pyneat-0.3.0-cp311-cp311-linux_aarch64.whl"
+    wheel = tmp_path / "sdk" / "pyneat-0.4.0-cp311-cp311-linux_aarch64.whl"
     wheel.write_bytes(b"PK")
     monkeypatch.setattr(bootstrap, "SEARCH_ROOTS", (str(tmp_path),))
     assert bootstrap.find_pyneat_wheel() == wheel

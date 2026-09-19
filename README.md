@@ -4,7 +4,7 @@
 
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-FF8C00)](https://docs.sima.ai)
-[![Neat](https://img.shields.io/badge/Neat-0.3.0-800080)](https://docs.sima.ai)
+[![Neat](https://img.shields.io/badge/Neat-0.4.0-800080)](https://docs.sima.ai)
 
 [![CI](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
@@ -37,7 +37,7 @@ No Docker, no WSL, no login. Every command here is typed on the board.
 
 ```bash
 sima-cli login
-sima-cli neat install core@v0.3.0    # once per board
+sima-cli neat install core@v0.4.0    # once per board
 
 pip install sima-vision
 sima-vision detect

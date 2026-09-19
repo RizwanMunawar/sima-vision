@@ -1,11 +1,11 @@
 """MP4 to Annex-B, so a container can be run on a board without ffmpeg.
 
-Neat 0.3.0 cannot build a container source. ``VideoTrackSelect`` emits
-``qtdemux name=<base> <base>.video_0``, and the graph then appends its instance
-suffix to element *names* only, so the pad reference goes stale and
-``gst_parse_launch`` fails with ``No src-element named "nN_demux"``. See
-:func:`sima_vision.media.make_elementary_h264_source`, which works around the
-same bug from the other side.
+A container goes through ``groups.video_input``, which builds its own
+decoder, and that decoder cannot be asked for ``decoder-tuning=default``. Left
+on ``auto`` it discards pictures: 57 of 78 frames of the short sample clip came
+through it on Neat 0.4.0. See
+:func:`sima_vision.media.default_tuned_decoder`. (Neat 0.3.0 could not build
+a container source at all, because of a demuxer naming bug.)
 
 The way past it is to stop handing Neat a container at all. An MP4 holds the
 very H.264 the raw path already runs; only the framing differs. In a container

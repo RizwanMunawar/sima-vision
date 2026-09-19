@@ -197,3 +197,27 @@ def test_draw_defaults_differ_per_task():
     assert detect.centre_dot is True
     assert segment.centre_dot is False
     assert isinstance(detect, DrawConfig)
+
+
+def test_the_decoder_hands_over_every_frame_by_default():
+    """`auto` tuning and a depth-1 runtime queue each dropped frames on a file.
+
+    Measured on a DevKit with Neat 0.4.0 and the sample clip: `auto` let 245 of
+    379 decoded frames through, and depth 1 lost more at the join whenever the
+    recorder slowed the pull loop. Either one makes the recording choppy.
+    """
+    cfg = TASKS["detect"]().load(
+        None, {"model.path": "m.tar.gz", "source.uri": "c.h264"}, use_file=False
+    )
+    assert cfg.decoder_tuning == "default"
+    assert cfg.queue_depth >= 4
+
+
+def test_an_unknown_decoder_tuning_is_refused():
+    with pytest.raises(ValueError, match="decoder_tuning"):
+        TASKS["detect"]().load(
+            None,
+            {"model.path": "m.tar.gz", "source.uri": "c.h264",
+             "runtime.decoder_tuning": "fast"},
+            use_file=False,
+        )

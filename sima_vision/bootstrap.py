@@ -14,12 +14,11 @@ The three pieces a run needs are found rather than demanded:
   something on PyPI, and `sima-cli sdk setup` puts it in a virtualenv of its own
   -- usually `~/pyneat` -- which is never the one pip installed *this* into. So
   it is looked for, and its site-packages goes on `sys.path` ahead of ours,
-  which also picks up the numpy<2 it was compiled against. If it is genuinely
+  which also picks up the numpy it was compiled against. If it is genuinely
   not installed, a wheel left on the board by the SDK is installed from disk.
 * **numpy and OpenCV** draw the overlay. The board ships both in
   `/usr/lib/python3*/dist-packages`, so that goes on the path too. Only a board
-  missing them installs anything, and then with numpy pinned below 2, because
-  2.x breaks pyneat and every `simaai-*` package with it.
+  missing them installs anything.
 * **the model and the clip** are downloaded on first use. See
   :mod:`sima_vision.assets`.
 
@@ -80,13 +79,14 @@ WHEEL_PATTERNS = ("pyneat-*.whl", "pyneat*.whl")
 #: The Neat core version this package is written against, and the one command
 #: that installs it on the board. `sima-cli` holds the community.sima.ai login
 #: that the download needs, which is why this is not something pip can do.
-NEAT_VERSION = "0.3.0"
+NEAT_VERSION = "0.4.0"
 NEAT_INSTALL = f"sima-cli neat install core@v{NEAT_VERSION}"
 
-#: numpy 2.x breaks pyneat and every simaai-* package, so the cap is not a
-#: preference. OpenCV is headless because nothing here opens a window and the
-#: GUI build wants X libraries the board does not have.
-IMAGING_REQUIREMENTS = ("numpy>=1.24,<2", "opencv-python-headless>=4.7,<5")
+#: Uncapped since Neat 0.4.0: its pyneat declares a bare ``numpy`` and runs on
+#: the board's numpy 2.x and OpenCV 5, and pinning numpy below 2 into its venv
+#: would now be what breaks it. OpenCV is headless because nothing here opens a
+#: window and the GUI build wants X libraries the board does not have.
+IMAGING_REQUIREMENTS = ("numpy>=1.24", "opencv-python-headless>=4.7")
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +412,7 @@ def locate_pyneat() -> tuple[object | None, str]:
     if site is None:
         return None, note
 
-    # Ahead of the current environment: that venv also holds the numpy<2 pyneat
+    # Ahead of the current environment: that venv also holds the numpy pyneat
     # was compiled against, and that is the one it has to get. Dropping any
     # already-imported impostor first, or the import below is a no-op that hands
     # the wrong module back out of sys.modules.
@@ -475,10 +475,8 @@ def ensure_imaging(env: Environment, step) -> None:
     """Make numpy and OpenCV importable, from the board's copies for preference.
 
     The board ships both in `/usr/lib/python3*/dist-packages`, which is on no
-    venv's path, so that directory goes on `sys.path` first. Installing them
-    with pip instead would pull numpy 2.x over the board's own copy and break
-    every `simaai-*` package, which is why the pip fallback pins numpy below 2
-    and only runs when the import genuinely fails.
+    venv's path, so that directory goes on `sys.path` first. The pip fallback
+    only runs when the import genuinely fails.
 
     Raises:
         ImportError: When neither is available and pip could not supply them.

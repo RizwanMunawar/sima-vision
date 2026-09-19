@@ -612,9 +612,9 @@ def needs_remux(path: Path) -> bool:
 def ensure_annex_b(cfg, step=None):
     """Reframe a container source into a raw stream, and point cfg at it.
 
-    Neat 0.3.0 cannot build a container source at all -- see
-    :func:`make_elementary_h264_source` for the demuxer naming bug -- so the
-    app used to stop and ask for ``ffmpeg``, on a board that does not have it.
+    The container path's decoder cannot be tuned and drops frames -- see
+    :func:`default_tuned_decoder` -- and Neat 0.3.0 could not build it at all,
+    so the app used to stop and ask for ``ffmpeg``, on a board that has none.
     The container holds the same H.264 the raw path already runs, so reframing
     it here costs one pass over the file and no quality at all.
 
@@ -887,7 +887,11 @@ def default_tuned_decoder(num_buffers: int) -> str:
 def make_elementary_h264_source(cfg, width: int, height: int, fps: int):
     """Build a file source chain without a demuxer.
 
-    This is ``VideoInputGroup`` rebuilt by hand to work around a Neat 0.3.0 bug.
+    This is ``VideoInputGroup`` rebuilt by hand, so the decoder in it is ours to
+    configure -- see :func:`default_tuned_decoder`, which is why this path is
+    kept on Neat 0.4.0.
+
+    It began as a workaround for a Neat 0.3.0 bug, fixed in 0.4.0.
     ``VideoTrackSelect`` emits ``qtdemux name=<base> <base>.video_0``, which is
     internally consistent, but the graph then appends an instance suffix to
     element *names* only. The declaration becomes ``name=n1_demux_8`` while the
@@ -979,9 +983,9 @@ def make_source_graph(cfg, width: int, height: int, fps: int):
             return make_elementary_h264_source(cfg, width, height, fps)
 
         console.warn(
-            "container input uses groups.video_input, which hits a demuxer\n"
-            "naming bug in Neat 0.3.0. If the pipeline fails to start with\n"
-            "'No src-element named \"nN_demux\"', convert to a raw stream:\n"
+            "container input uses groups.video_input, whose decoder drops\n"
+            "frames in bursts, so the recording will be choppy. Convert to a\n"
+            "raw stream:\n"
             f"  ffmpeg -i {cfg.source_uri} -c:v copy -bsf:v h264_mp4toannexb \\\n"
             f"    -f h264 {Path(cfg.source_uri).with_suffix('.h264')}\n"
             "then point source.uri at the .h264 file."
