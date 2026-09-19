@@ -186,18 +186,11 @@ runtime:
   frames: 0                  # 0 = run until interrupted
   pull_timeout_ms: 20000     # how long to wait for a frame before giving up
 
-  # Depth of the runtime's own queues, and of the app's sink thread.
-  #
-  # It does NOT set the buffer counts in the pipeline the app prints at startup:
-  # `max-buffers=4` on the appsinks and `num-buffers=4` on preproc and the MLA
-  # are fixed inside pyneat and read the same at 1 as at 3. So this is not the
-  # knob for "the run stops after N frames and then times out"  - measured on a
-  # Modalix DevKit with the yolo26m-seg pack, 3 stalled at 22 frames and 1 at
-  # 17, which is the same stall with different noise.
-  #
-  # What it does change is how far ahead of the sinks this app may run. Low
-  # keeps memory flat; higher absorbs an uneven frame.
-  queue_depth: 1
+  # Depth of the runtime's own queues. Below 4 the graph drops frames between
+  # the decoder and the join whenever the recorder slows the pull loop, and the
+  # recording comes out choppy: measured on a Modalix DevKit with Neat 0.4.0,
+  # 1 delivered 241 of 379 frames, 2 delivered 342 and 4 delivered all 379.
+  queue_depth: 4
 
   # Buffers each public output may hold. There are two public outputs, so this
   # number is doubled, and every one of them can hold a frame checked out of

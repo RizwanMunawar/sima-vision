@@ -498,11 +498,15 @@ class BaseConfig:
         max_detections: Top-K cap per frame.
         frames: Frame limit. 0 runs until interrupted.
         pull_timeout_ms: How long to wait for a frame before giving up.
-        queue_depth: Depth of the Neat runtime's own queues. Every slot can
-            park a decoded frame, so this counts against the decoder's pool
-            along with ``output_buffers``: raise it and a stalling run stalls
-            sooner. It does not change the ``max-buffers`` and ``num-buffers``
-            in the printed pipeline, which pyneat fixes at 4.
+        queue_depth: Depth of the Neat runtime's own queues. At 1 the graph
+            drops frames between the decoder and the join whenever the pull
+            loop slows down -- 241 of 379 arrived with the recorder running,
+            ``block`` notwithstanding. 4 delivered all 379. It used to be kept
+            at 1 to spare the decoder's pool, back when the decoder's ``auto``
+            tuning discarded pictures rather than wait for a buffer; with
+            ``decoder_tuning: default`` it waits, so the slack is safe. It does
+            not change the ``max-buffers`` and ``num-buffers`` in the printed
+            pipeline, which pyneat fixes at 4.
         sink_queue_depth: How many finished frames may wait for the sink
             thread. These are numpy copies in host memory and hold no decoder
             buffer, so depth here is the cheap kind: it lets the pull loop keep
@@ -605,7 +609,7 @@ class BaseConfig:
 
     frames: int = 0
     pull_timeout_ms: int = 20000
-    queue_depth: int = 1
+    queue_depth: int = 4
     sink_queue_depth: int = 12
     sink_queue_mb: int = 1024
     decoder_pool: int = 8
@@ -738,7 +742,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         max_detections=_int(decode, "max_detections", 50),
         frames=_int(runtime, "frames", 0),
         pull_timeout_ms=_int(runtime, "pull_timeout_ms", 20000),
-        queue_depth=_int(runtime, "queue_depth", 1),
+        queue_depth=_int(runtime, "queue_depth", 4),
         sink_queue_depth=_int(runtime, "sink_queue_depth", 12),
         sink_queue_mb=_int(runtime, "sink_queue_mb", 1024),
         decoder_pool=_int(runtime, "decoder_pool", 8),

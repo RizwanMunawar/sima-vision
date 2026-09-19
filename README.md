@@ -114,7 +114,7 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--validate` | all | Resolve and check the settings, then stop. Needs no board |
 | `--quiet`, `-q` | all | Warnings, errors and the closing report only |
 | `--profile` | all | Per-stage timings, when a run is slower than it should be |
-| `--queue-depth N` | all | Neat's own queue depth. Every slot holds a decoded frame, so raising it makes a starved run worse. Default `1` |
+| `--queue-depth N` | all | Neat's own queue depth. Below `4` the graph drops frames when the recorder falls behind. Default `4` |
 | `--sink-queue-depth N` | all | Finished frames that may wait for the recorder. Host memory only. Default `12` |
 | `--sink-queue-mb MB` | all | Memory budget for that backlog, which grows it to fit a known clip |
 | `--output-buffers N` | all | Buffers each public output may hold. Default `1` |

@@ -94,7 +94,7 @@ decode:
 runtime:
   frames: 0                  # 0 = run until interrupted
   pull_timeout_ms: 20000     # how long to wait for a frame before giving up
-  queue_depth: 3
+  queue_depth: 4             # below 4 the graph drops frames under load
 
   # Buffers each public output may hold. THE knob for "the run stops after N
   # frames and then times out".
