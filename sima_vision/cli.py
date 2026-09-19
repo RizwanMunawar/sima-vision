@@ -51,7 +51,9 @@ from .export import (
     choose_sdk_python,
     compile_recipe,
     export_onnx,
+    needs_fixed_batch,
     next_steps,
+    pin_batch_size,
     requirements_help,
     run_recipe,
     sdk_candidates,
@@ -511,12 +513,31 @@ def run_compile(args) -> int:
             "emitting the ELF. Ten to fifteen minutes is normal."
         )
         step.note(f"every line below is the recipe's own, and all of it lands in {log_path}")
-        narration = Narration(step)
-        pack = run_recipe(
-            recipe_path, onnx_path, out_dir,
-            on_line=narration.line, on_silence=narration.silence,
-            python=sdk_python,
-        )
+        pack = None
+        # Two attempts at most, and the second only for the one failure afe
+        # names a fix for. See `pin_batch_size`.
+        for attempt in (1, 2):
+            narration = Narration(step)
+            try:
+                pack = run_recipe(
+                    recipe_path, onnx_path, out_dir,
+                    on_line=narration.line, on_silence=narration.silence,
+                    python=sdk_python,
+                )
+                break
+            except RuntimeError:
+                retry = (
+                    attempt == 1
+                    and needs_fixed_batch(log_path)
+                    and pin_batch_size(recipe_path)
+                )
+                if not retry:
+                    raise
+                step.note(
+                    "afe will not load this graph with the batch size left flexible:\n"
+                    "its attention blocks reshape across the batch axis. Pinning it to 1\n"
+                    "and running the compile again, which is what afe asked for."
+                )
         step.detail(f"{narration.lines} lines of compiler output -> {log_path}")
         finish_pack(pack, step)
         step.done(f"{pack} ({human_bytes(pack.stat().st_size)})", timed=True)

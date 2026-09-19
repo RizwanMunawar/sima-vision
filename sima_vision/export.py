@@ -457,6 +457,100 @@ TAIL_LINES = 40
 COMPILE_LOG = "compile.log"
 
 
+#: What afe says when the graph's batch axis cannot be left free. It names the
+#: fix itself, which is the only reason this is worth matching on: the recipe
+#: is SiMa's and is otherwise copied out of the pack untouched.
+FLEXIBLE_BATCH_ERROR = (
+    "flexible_batch_size=True but the following nodes do not use batch size 1"
+)
+
+#: The argument in the recipe's `load_model` call that the retry goes after.
+BATCH_ANCHOR = "target=gen2_target,"
+
+
+def needs_fixed_batch(log_path: Path) -> bool:
+    """Whether a failed compile failed for the one reason worth retrying.
+
+    A YOLO26 head with attention blocks reshapes across the batch axis --
+    `/model.10/m/m.0/attn/MatMul` and friends -- and afe refuses to load such a
+    graph with the batch size left flexible. It is the default, the published
+    detection packs were built with it, and it is wrong for this model.
+    """
+    try:
+        return FLEXIBLE_BATCH_ERROR in log_path.read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return False
+
+
+def pin_batch_size(recipe: Path) -> bool:
+    """Pin the recipe's ``load_model`` to a fixed batch size, in place.
+
+    The one edit this makes to SiMa's own script, and only after afe has asked
+    for it by name. Everything else about the recipe -- bfloat16, MSE
+    calibration, the tessellation layouts -- stays exactly as shipped, because
+    those are settings that produced a pack known to work and a paraphrase of
+    them would drift.
+
+    Returns:
+        True when the recipe was changed, False when there was nothing to
+        change or nothing recognisable to change *in*, which is the signal not
+        to retry.
+    """
+    try:
+        text = recipe.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if "flexible_batch_size" in text:
+        return False
+    # Exactly one, or this does not understand the script it is editing.
+    if text.count(BATCH_ANCHOR) != 1:
+        return False
+    fixed = text.replace(
+        BATCH_ANCHOR, BATCH_ANCHOR + "\n        flexible_batch_size=False,", 1
+    )
+    try:
+        recipe.write_text(fixed, encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def recipe_env(python: str | None = None) -> dict:
+    """The environment the compile recipe runs in.
+
+    Two things beyond a copy of this one.
+
+    ``PYTHONUNBUFFERED`` so the recipe's output arrives as it happens rather
+    than in one burst at the end.
+
+    And the interpreter's own ``bin`` on the front of ``PATH``, which is what
+    activating its virtualenv would have done. The compile needs it: afe does
+    not do the last step in Python, it shells out to ``mla-masm``, the MLA
+    assembler, and finds that on PATH or not at all. Running the recipe under
+    another virtualenv's python without its bin buys five minutes of
+    quantization and then
+    ``CRITICAL - [Errno 2] No such file or directory: 'mla-masm'``.
+
+    The directory is taken unresolved on purpose. A virtualenv's ``python`` is
+    a symlink to the interpreter it was built from -- pyenv's, usually -- and
+    resolving it lands in *that* installation's bin, which has a python and
+    none of the SDK's tools.
+    """
+    import os
+    import sys
+
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    bin_dir = Path(python or sys.executable).parent
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    # Only when it really is a virtualenv, for anything that reads this rather
+    # than PATH. A bare system python has no root to point at.
+    if (bin_dir.parent / "pyvenv.cfg").is_file():
+        env["VIRTUAL_ENV"] = str(bin_dir.parent)
+    return env
+
+
 def run_recipe(recipe: Path, onnx: Path, build_dir: Path,
                timeout: int = 3600, on_line=None, on_silence=None,
                log_path: Path | None = None,
@@ -497,7 +591,6 @@ def run_recipe(recipe: Path, onnx: Path, build_dir: Path,
         RuntimeError: When the recipe fails, times out, or finishes without a
             pack. The log's path is named in all three.
     """
-    import os
     import queue as queue_lib
     import subprocess
     import sys
@@ -530,7 +623,7 @@ def run_recipe(recipe: Path, onnx: Path, build_dir: Path,
         # way to see which step a warning belongs to.
         stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        env=recipe_env(python),
     )
 
     # A reader thread and a queue, rather than iterating the pipe here: reading

@@ -15,7 +15,7 @@ from collections import deque
 
 from .console import console
 from .runtime import time_ms
-from .samples import FrameStamp
+from .samples import FrameStamp, frame_geometry_warning
 from .sinks import Pipeline, SinkJob, SinkWorker
 
 HEARTBEAT_EVERY = 50
@@ -364,6 +364,24 @@ class TaskRuntime:
     stream = "objects"
     unit = "detections"
     stage = ""
+
+    #: Set once the first frame has been measured against the graph's geometry.
+    _geometry_checked = False
+
+    def check_geometry(self, pipeline: Pipeline, frame) -> None:
+        """Warn once if the decoded frame is not the size the graph expects.
+
+        Checked on a real frame rather than trusted from the probe, because a
+        disagreement here silently misplaces every box in the run and there is
+        nothing in the output that says so -- the boxes simply look a little
+        wrong, which reads as a bad model rather than a bad number.
+        """
+        if self._geometry_checked:
+            return
+        self._geometry_checked = True
+        message = frame_geometry_warning(frame, pipeline.frame_w, pipeline.frame_h)
+        if message:
+            console.warn(message)
 
     def decode(self, pipeline: Pipeline, cfg, sample, index: int):
         """Turn one pulled sample into a frame and this task's results.

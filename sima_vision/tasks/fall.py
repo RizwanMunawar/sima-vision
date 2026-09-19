@@ -41,7 +41,6 @@ from ..config import (
 from ..console import console
 from ..draw import draw_banner, draw_caption, draw_fps, draw_scale
 from ..runloop import TaskRuntime
-from ..runtime import time_ms
 from ..samples import (
     extract_bbox_payload,
     first_tensor,
@@ -743,26 +742,50 @@ def state_color(state: str) -> tuple[int, int, int]:
     return STATE_COLORS.get(state, (200, 200, 200))
 
 
-def track_caption(track: Track, draw) -> str:
-    """Build the caption for one tracked person."""
+#: What a fallen track's box says. The one word is the whole point of the
+#: frame: a caption that also carries an id, a state and a score buries it in
+#: exactly the moment someone is scanning for it.
+FALL_CAPTION = "FALL"
+
+
+def track_label(track: Track, labels: list[str]) -> str:
+    """The detected class name for a track, or ``person`` when unnamed."""
+    class_id = int(track.box.get("class_id", 0))
+    if 0 <= class_id < len(labels):
+        return labels[class_id]
+    return "person"
+
+
+def track_caption(track: Track, draw, labels: list[str]) -> str:
+    """Build the caption for one tracked person.
+
+    A fallen track says ``FALL`` and nothing else. Every other track says what
+    it is -- the class name off the detection, not the state machine's word for
+    it: `upright` is this program's internal vocabulary and means nothing to
+    someone watching a corridor.
+    """
+    if track.state == FALLEN:
+        return FALL_CAPTION
     parts = []
     if draw.show_track_ids:
         parts.append(f"#{track.track_id}")
     if draw.show_labels:
-        parts.append(track.state)
+        parts.append(track_label(track, labels))
     if draw.show_scores:
         parts.append(f"{track.box['score']:.{max(0, draw.score_decimals)}f}")
     return " ".join(parts)
 
 
-def draw_tracks(frame, tracks: list[Track], draw, fall: FallConfig) -> None:
+def draw_tracks(frame, tracks: list[Track], draw, fall: FallConfig,
+                labels: list[str]) -> None:
     """Draw every tracked person, coloured by state, in place.
 
     Args:
         frame: BGR image, modified in place.
         tracks: Live tracks with their fall state already resolved.
         draw: Visualization settings.
-        fall: Fall settings, for the countdown readout on a pending fall.
+        fall: Fall settings. Kept for the box weight rules.
+        labels: Class names, so a box says what was detected.
     """
     cv2 = runtime.cv2
     height, width = frame.shape[:2]
@@ -788,11 +811,11 @@ def draw_tracks(frame, tracks: list[Track], draw, fall: FallConfig) -> None:
             cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, weight)
 
-        label = track_caption(track, draw)
-        if track.state == FALLING and fall.confirm_seconds > 0:
-            held = max(0.0, time_ms() / 1000.0 - track.state_since)
-            label = f"{label} {min(held, fall.confirm_seconds):.1f}/{fall.confirm_seconds:.1f}s"
-        draw_caption(frame, label, (x1, y1), color, draw, scale)
+        # No countdown on a pending fall any more. It read
+        # `#3 falling 0.8/1.5s`, which is four facts in the place where one is
+        # wanted, and the state is already in the box colour.
+        draw_caption(frame, track_caption(track, draw, labels), (x1, y1),
+                     color, draw, scale)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -883,6 +906,7 @@ class FallRuntime(TaskRuntime):
             stamp_pts / 1e9 if stamp_pts >= 0
             else (index - 1) / float(pipeline.fps or 25)
         )
+        self.check_geometry(pipeline, frame)
         people = person_boxes(cfg, pipeline, boxes, pipeline.frame_h)
         tracks = pipeline.tracker.update(people, now)
         fallen_now = (
@@ -937,7 +961,7 @@ class FallRuntime(TaskRuntime):
         # FPS first, so a track in the top-left corner is never hidden by it.
         if cfg.video_hud:
             draw_fps(annotated, fps, cfg.draw)
-        draw_tracks(annotated, results, cfg.draw, cfg.fall)
+        draw_tracks(annotated, results, cfg.draw, cfg.fall, pipeline.labels)
         down = [t for t in results if t.state == FALLEN]
         if cfg.draw.banner and down:
             ids = ", ".join(f"#{t.track_id}" for t in down)
@@ -973,7 +997,11 @@ class FallRuntime(TaskRuntime):
 # Task
 # ─────────────────────────────────────────────────────────────────────────────
 
-FALL_DRAW = DrawConfig(box_thickness=3, centre_dot=True, banner=True)
+# Ids and scores off: a fall frame is read at a glance, and `#3 person 0.87`
+# is two numbers in front of the one word that matters. Both are still
+# config flags for anyone tuning the tracker.
+FALL_DRAW = DrawConfig(box_thickness=3, centre_dot=True, banner=True,
+                       show_track_ids=False, show_scores=False)
 
 
 class FallTask(Task):

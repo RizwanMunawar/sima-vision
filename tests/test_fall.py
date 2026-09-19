@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from sima_vision.tasks import fall
 from sima_vision.tasks.fall import (
     FALLEN,
     FALLING,
@@ -283,3 +284,66 @@ def test_the_message_carries_the_signals_that_fired():
         assert "1.9" in body and "812.5" in body
     finally:
         sender.close(timeout=2.0)
+
+
+# -- what a box says --
+
+def _track(state, track_id=3, class_id=0, score=0.873):
+    box = {"x1": 10.0, "y1": 10.0, "x2": 100.0, "y2": 300.0,
+           "score": score, "class_id": class_id}
+    return fall.Track(track_id=track_id, box=box, state=state)
+
+
+def test_a_fallen_box_says_one_word():
+    """It is the only thing anyone is scanning the frame for.
+
+    The caption used to read `#3 fallen 0.87`: an id nobody asked for, the
+    state machine's own vocabulary, and a score -- with the one fact that
+    matters third in line and in lower case.
+    """
+    assert fall.track_caption(_track(fall.FALLEN), fall.FALL_DRAW, ["person"]) == "FALL"
+
+
+def test_an_upright_box_says_what_was_detected():
+    """The class name off the detection, not the state machine's word.
+
+    `upright` is this program's internal vocabulary. Someone watching a
+    corridor reads `person`.
+    """
+    caption = fall.track_caption(_track(fall.UPRIGHT), fall.FALL_DRAW, ["person"])
+    assert caption == "person"
+    assert fall.UPRIGHT not in caption
+
+
+def test_a_pending_fall_does_not_start_counting_in_the_caption():
+    """`person 0.8/1.5s` is four facts where one is wanted.
+
+    The state is already in the box colour, which is where it belongs.
+    """
+    caption = fall.track_caption(_track(fall.FALLING), fall.FALL_DRAW, ["person"])
+    assert caption == "person"
+    assert "/" not in caption
+
+
+def test_the_class_name_is_read_off_the_detection():
+    """A model trained on other classes must not be captioned `person`."""
+    labels = ["worker", "forklift", "pallet"]
+    caption = fall.track_caption(_track(fall.UPRIGHT, class_id=1), fall.FALL_DRAW, labels)
+    assert caption == "forklift"
+
+
+def test_an_unknown_class_id_does_not_crash_the_overlay():
+    track = _track(fall.UPRIGHT, class_id=99)
+    assert fall.track_caption(track, fall.FALL_DRAW, ["person"]) == "person"
+
+
+def test_ids_and_scores_are_off_by_default_but_still_available():
+    """Off for reading a frame, on for tuning a tracker."""
+    from dataclasses import replace
+
+    assert fall.FALL_DRAW.show_track_ids is False
+    assert fall.FALL_DRAW.show_scores is False
+    verbose = replace(fall.FALL_DRAW, show_track_ids=True, show_scores=True)
+    assert fall.track_caption(_track(fall.UPRIGHT), verbose, ["person"]) == "#3 person 0.87"
+    # A fall still says FALL: the flags add detail, they do not bury the word.
+    assert fall.track_caption(_track(fall.FALLEN), verbose, ["person"]) == "FALL"

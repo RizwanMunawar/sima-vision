@@ -34,6 +34,7 @@ class DetectRuntime(TaskRuntime):
         payload, _ = extract_bbox_payload(joined_field(sample, "detections", 1))
         boxes = parse_boxes(payload, pipeline.frame_w, pipeline.frame_h, cfg.max_detections)
         frame = frame_to_bgr(first_tensor(joined_field(sample, "frame", 0)))
+        self.check_geometry(pipeline, frame)
         # `boxes` and `frame` are copies, so the decoder's buffer is free from
         # here on. See FrameStamp for why that matters.
         return frame, boxes, 0.0

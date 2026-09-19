@@ -504,6 +504,7 @@ class SegmentRuntime(TaskRuntime):
         payload, bbox_tensor = extract_bbox_payload(instances_field)
         boxes = parse_boxes(payload, pipeline.frame_w, pipeline.frame_h, cfg.max_detections)
         frame = frame_to_bgr(first_tensor(joined_field(sample, "frame", 0)))
+        self.check_geometry(pipeline, frame)
         decode_end = time_ms()
 
         if cfg.segment.describe and not pipeline.described and boxes:

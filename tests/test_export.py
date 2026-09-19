@@ -458,6 +458,142 @@ def test_the_export_does_not_start_by_loading_torch(tmp_path, monkeypatch):
     )
     with pytest.raises(RuntimeError, match="pip install torch"):
         export.export_onnx(tmp_path / "missing.pt", tmp_path / "out.onnx")
+# -- the one retry --
+
+#: The shape of the recipe's load_model call, enough to edit.
+RECIPE_LOAD = '''
+loaded_net = load_model(
+    ImporterParams(
+        format=ModelFormat.onnx,
+        file_paths=[str(compile_path)],
+    ),
+    target=gen2_target,
+)
+'''
+
+
+def test_a_flexible_batch_refusal_is_recognised(tmp_path):
+    """afe names the fix in the message, which is why this is matchable."""
+    log = tmp_path / "compile.log"
+    log.write_text(
+        "afe.core.flexible_batch_analysis - ERROR - Model is loaded with "
+        "flexible_batch_size=True but the following nodes do not use batch size 1: "
+        "EV_4/reshape_0.  Pass flexible_batch_size=False to load_model",
+        encoding="utf-8",
+    )
+    assert export.needs_fixed_batch(log) is True
+
+
+def test_any_other_failure_is_not_retried(tmp_path):
+    """A retry that cannot help is a second wait for the same answer."""
+    log = tmp_path / "compile.log"
+    log.write_text("ModuleNotFoundError: No module named 'onnxsim'", encoding="utf-8")
+    assert export.needs_fixed_batch(log) is False
+    assert export.needs_fixed_batch(tmp_path / "nothing.log") is False
+
+
+def test_the_batch_size_is_pinned_in_the_recipes_own_call(tmp_path):
+    """A YOLO26 head with attention reshapes across the batch axis.
+
+    `/model.10/m/m.0/attn/MatMul` and friends land on EV, and afe then refuses
+    to load the graph with the batch size left free -- which is the default,
+    and which the published detection packs were built with.
+    """
+    recipe = tmp_path / "compile_modelsdk.py"
+    recipe.write_text(RECIPE_LOAD, encoding="utf-8")
+
+    assert export.pin_batch_size(recipe) is True
+    text = recipe.read_text(encoding="utf-8")
+    assert "flexible_batch_size=False," in text
+    # Inside the call, not appended to the file.
+    assert text.index("flexible_batch_size") < text.index("\n)")
+
+
+def test_pinning_twice_is_not_an_edit(tmp_path):
+    """The retry runs once. A recipe already pinned has nothing to give."""
+    recipe = tmp_path / "compile_modelsdk.py"
+    recipe.write_text(RECIPE_LOAD, encoding="utf-8")
+    assert export.pin_batch_size(recipe) is True
+    assert export.pin_batch_size(recipe) is False
+
+
+def test_an_unrecognised_recipe_is_left_alone(tmp_path):
+    """Editing a script this does not understand is worse than not retrying.
+
+    Silence here means the compile reports afe's own refusal, which is a
+    better outcome than a mangled copy of SiMa's recipe failing differently.
+    """
+    recipe = tmp_path / "compile_modelsdk.py"
+    recipe.write_text("print('not the script we think it is')\n", encoding="utf-8")
+    assert export.pin_batch_size(recipe) is False
+    assert recipe.read_text(encoding="utf-8") == "print('not the script we think it is')\n"
+
+
+def test_a_recipe_with_two_load_calls_is_left_alone(tmp_path):
+    """Ambiguous is the same as unrecognised: do not guess which one."""
+    recipe = tmp_path / "compile_modelsdk.py"
+    recipe.write_text(RECIPE_LOAD + RECIPE_LOAD, encoding="utf-8")
+    assert export.pin_batch_size(recipe) is False
+
+
+# -- the environment the recipe runs in --
+
+def test_the_interpreters_own_bin_goes_on_the_front_of_path(tmp_path):
+    """afe shells out to `mla-masm` and finds it on PATH or not at all.
+
+    Running the recipe under another virtualenv's python without its bin buys
+    five minutes of quantization and then
+    `CRITICAL - [Errno 2] No such file or directory: 'mla-masm'` -- at the
+    last step, with nothing to show for the wait.
+    """
+    import os
+
+    venv_bin = tmp_path / "model-compiler" / "bin"
+    venv_bin.mkdir(parents=True)
+    env = export.recipe_env(str(venv_bin / "python3"))
+    assert env["PATH"].split(os.pathsep)[0] == str(venv_bin)
+    # And the rest of it is still there: the toolchain is not the only thing
+    # the recipe needs to find.
+    assert os.environ.get("PATH", "") in env["PATH"]
+
+
+def test_virtual_env_is_set_only_for_an_actual_virtualenv(tmp_path):
+    """A bare system python has no root to point at."""
+    plain = tmp_path / "usr" / "bin"
+    plain.mkdir(parents=True)
+    assert "VIRTUAL_ENV" not in export.recipe_env(str(plain / "python3"))
+
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = /x", encoding="utf-8")
+    assert export.recipe_env(str(venv / "bin" / "python3"))["VIRTUAL_ENV"] == str(venv)
+
+
+def test_the_bin_is_not_resolved_through_the_symlink(tmp_path):
+    """A venv's `python` is a symlink to the interpreter it was built from.
+
+    Resolving it lands in pyenv's bin, which has a python and none of the
+    SDK's tools -- so the one directory that had `mla-masm` is the one that
+    would be left off.
+    """
+    import os
+
+    real_bin = tmp_path / "pyenv" / "versions" / "3.10.21" / "bin"
+    real_bin.mkdir(parents=True)
+    real = real_bin / "python"
+    real.write_text("", encoding="utf-8")
+
+    venv_bin = tmp_path / "model-compiler" / "bin"
+    venv_bin.mkdir(parents=True)
+    link = venv_bin / "python3"
+    try:
+        link.symlink_to(real)
+    except (OSError, NotImplementedError):  # pragma: no cover - needs privilege
+        pytest.skip("symlinks not available here")
+
+    first = export.recipe_env(str(link))["PATH"].split(os.pathsep)[0]
+    assert first == str(venv_bin)
+    assert first != str(real_bin)
 
 
 # -- the compile narrates itself --
