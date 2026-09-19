@@ -247,3 +247,59 @@ def test_a_file_with_no_video_track_at_all_says_so(tmp_path):
     src.write_bytes(box(b"ftyp", b"isom") + box(b"moov", audio))
     with pytest.raises(RuntimeError, match="no video track"):
         remux(src, tmp_path / "out.h264")
+
+
+def _annex_b_clip(frames: int) -> list[bytes]:
+    """Access units shaped like the hardware encoder's: IDR with SPS/PPS, then P."""
+    sps = b"\x67\x64\x00\x29\xac\x2c\xa5\x01\xe0\x08\x9f\x97\x01\x10"
+    pps = b"\x68\xeb\xe3\xcb\x22\xc0"
+    units = []
+    for index in range(frames):
+        if index % 5 == 0:
+            body = b"\x00\x00\x00\x01" + sps + b"\x00\x00\x00\x01" + pps
+            body += b"\x00\x00\x00\x01\x65\x88" + bytes([index]) * 40
+        else:
+            body = b"\x00\x00\x00\x01\x09\xf0\x00\x00\x01\x41\x9a" + bytes([index]) * 20
+        units.append(body)
+    return units
+
+
+def test_a_written_mp4_reads_back_frame_for_frame(tmp_path):
+    """The writer is the reader's inverse: every access unit survives the trip."""
+    from sima_vision.mp4 import Mp4Writer, remux, split_annex_b
+
+    units = _annex_b_clip(12)
+    writer = Mp4Writer(tmp_path / "out.mp4", 1920, 1080, 24)
+    for unit in units:
+        writer.add(unit)
+    writer.close()
+    assert writer.frames == 12
+    assert writer.sync == [1, 6, 11], "IDRs are the sync samples, 1-based"
+
+    frames = remux(tmp_path / "out.mp4", tmp_path / "back.h264")
+    assert frames == 12
+    back = split_annex_b((tmp_path / "back.h264").read_bytes())
+    slices = [n for n in back if n[0] & 0x1F in (1, 5)]
+    expected = [n for u in units for n in split_annex_b(u) if n[0] & 0x1F in (1, 5)]
+    assert slices == expected
+
+
+def test_every_frame_lasts_exactly_one_source_interval(tmp_path):
+    """Constant durations, whatever pace the app produced the frames at."""
+    import struct
+
+    from sima_vision.mp4 import Mp4Writer, find_box
+
+    writer = Mp4Writer(tmp_path / "out.mp4", 64, 48, 30)
+    for unit in _annex_b_clip(7):
+        writer.add(unit)
+    writer.close()
+    data = (tmp_path / "out.mp4").read_bytes()
+    moov = find_box(data, (b"moov",))
+    stts = find_box(data, (b"trak", b"mdia", b"minf", b"stbl", b"stts"), *moov)
+    count, (samples, delta) = struct.unpack_from(">I", data, stts[0] + 4)[0], \
+        struct.unpack_from(">II", data, stts[0] + 8)
+    mdhd = find_box(data, (b"trak", b"mdia", b"mdhd"), *moov)
+    timescale = struct.unpack_from(">I", data, mdhd[0] + 12)[0]
+    assert (count, samples) == (1, 7)
+    assert timescale / delta == 30

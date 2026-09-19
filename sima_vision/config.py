@@ -37,6 +37,9 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 #: Labels used when nothing else resolves.
 PACKAGED_LABELS = PACKAGE_ROOT / "data" / "coco_labels.txt"
 
+#: Where the recording is encoded: the hardware encoder, or OpenCV in software.
+VIDEO_ENCODERS = ("sima", "opencv")
+
 #: ``neatdecoder``'s ``decoder-tuning`` values.
 DECODER_TUNINGS = ("default", "auto", "low-memory", "throughput-low-latency")
 
@@ -568,7 +571,12 @@ class BaseConfig:
         save_format: ``jpg`` or ``png``.
         video_enable: Whether to write an annotated video on the DevKit.
         video_path: Output video path.
-        video_codec: Four-character FourCC, with an MJPG fallback.
+        video_encoder: ``sima`` encodes on the DevKit's hardware H.264
+            encoder; ``opencv`` uses OpenCV's software writer and
+            ``video_codec``, at roughly a tenth of the speed.
+        video_bitrate_kbps: Target bitrate for the ``sima`` encoder.
+        video_codec: Four-character FourCC for the ``opencv`` encoder, with an
+            MJPG fallback.
         video_fps: Output frame rate. 0 matches the source.
         video_hud: Whether to draw the frame-rate badge.
         insight_enable: Whether to stream to Neat Insight.
@@ -630,6 +638,8 @@ class BaseConfig:
 
     video_enable: bool = True
     video_path: str = "output.mp4"
+    video_encoder: str = "sima"
+    video_bitrate_kbps: int = 12000
     video_codec: str = "mp4v"
     video_fps: int = 0
     video_hud: bool = True
@@ -761,6 +771,8 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         save_format=_str(save, "format", "jpg").lower().lstrip("."),
         video_enable=_bool(video, "enable", True),
         video_path=_str(video, "path", defaults.video_path),
+        video_encoder=_str(video, "encoder", "sima").lower(),
+        video_bitrate_kbps=_int(video, "bitrate_kbps", 12000),
         video_codec=_str(video, "codec", "mp4v"),
         video_fps=_int(video, "fps", 0),
         video_hud=_bool(video, "hud", True),
@@ -848,6 +860,13 @@ def validate_base(cfg: BaseConfig) -> None:
         raise ValueError("output.save.format must be jpg or png")
     if cfg.video_enable and not cfg.video_path:
         raise ValueError("output.video.path must be set when video output is enabled")
+    if cfg.video_encoder not in VIDEO_ENCODERS:
+        raise ValueError(
+            f"output.video.encoder must be one of {', '.join(VIDEO_ENCODERS)}, "
+            f"got {cfg.video_encoder!r}"
+        )
+    if cfg.video_bitrate_kbps <= 0:
+        raise ValueError("output.video.bitrate_kbps must be > 0")
     if len(cfg.video_codec) != 4:
         raise ValueError(
             f"output.video.codec must be a 4-character FourCC such as mp4v or MJPG, "

@@ -40,7 +40,7 @@ from pathlib import Path
 from . import __version__
 from .assets import default_model_path, ensure_model, models_dir
 from .bootstrap import detect_environment, ensure_runtime
-from .config import DECODER_TUNINGS
+from .config import DECODER_TUNINGS, VIDEO_ENCODERS
 from .console import console, human_bytes
 from .devkit import DEVKIT_ENV, run_pull, run_push
 from .export import (
@@ -203,6 +203,15 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     out.add_argument(
         "--no-video", dest="output.video.enable", action="store_const", const=False,
         help="Do not record.",
+    )
+    out.add_argument(
+        "--video-encoder", dest="output.video.encoder", choices=VIDEO_ENCODERS,
+        help="'sima' encodes H.264 on the DevKit's hardware encoder; 'opencv' "
+             "uses OpenCV's software writer, about ten times slower. Default sima.",
+    )
+    out.add_argument(
+        "--video-bitrate", dest="output.video.bitrate_kbps", type=int, metavar="KBPS",
+        help="Target bitrate for the hardware encoder. Default 12000.",
     )
     out.add_argument(
         "--save-dir", dest="output.save.dir", metavar="DIR",

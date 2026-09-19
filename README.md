@@ -103,6 +103,8 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--timeout MS` | all | How long to wait for a frame before giving up. Default `20000` |
 | `--video-path PATH` | all | Where the annotated recording is written |
 | `--no-video` | all | Do not record |
+| `--video-encoder` | all | `sima` (hardware H.264, default) or `opencv` (software, about ten times slower) |
+| `--video-bitrate KBPS` | all | Target bitrate for the hardware encoder. Default `12000` |
 | `--save-dir DIR` | all | Where annotated stills are written |
 | `--save-every N` | all | Write every Nth still. Default `10`; `0` disables |
 | `--no-save` | all | Do not write stills |
