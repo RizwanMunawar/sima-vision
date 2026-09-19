@@ -668,22 +668,76 @@ def test_the_recipe_runs_under_the_interpreter_it_is_given(tmp_path):
     assert sys.executable in (build / export.COMPILE_LOG).read_text(encoding="utf-8")
 
 
-def test_the_activated_virtualenv_is_among_the_candidates(monkeypatch):
+def test_the_activated_virtualenv_is_among_the_candidates(tmp_path, monkeypatch):
     """`activate-model-compiler` exists to switch virtualenvs.
 
     Not asking the one it switched to is how `no afe module here` got printed
     at a prompt that reads `(model-compiler)`.
     """
-    monkeypatch.setenv("VIRTUAL_ENV", "/opt/model-compiler")
+    venv = tmp_path / "model-compiler"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("", encoding="utf-8")
+
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv))
     monkeypatch.delenv(export.MODEL_SDK_PYTHON_ENV, raising=False)
-    candidates = export.sdk_candidates()
-    assert any("model-compiler" in python for python in candidates)
+    assert any("model-compiler" in python for python in export.sdk_candidates())
 
 
-def test_an_interpreter_can_be_named_outright(monkeypatch):
-    """The escape hatch has to win, or it is not one."""
-    monkeypatch.setenv(export.MODEL_SDK_PYTHON_ENV, "/opt/sdk/bin/python")
-    assert export.sdk_candidates()[0] == "/opt/sdk/bin/python"
+def test_an_interpreter_named_by_hand_is_tried_even_if_it_is_not_there():
+    """Dropping it silently turns an instruction into nothing happening."""
+    import os
+
+    os.environ[export.MODEL_SDK_PYTHON_ENV] = "/nowhere/bin/python"
+    try:
+        assert export.sdk_candidates()[0] == "/nowhere/bin/python"
+    finally:
+        del os.environ[export.MODEL_SDK_PYTHON_ENV]
+
+
+def test_half_the_sdk_is_not_the_sdk(monkeypatch):
+    """The one that actually happened.
+
+    /opt/neat-insight/venv/bin/python3 has `afe` and no `sima_utils`. Taking
+    the first interpreter with `afe` announced it as the Model SDK, skipped
+    every candidate behind it, and failed on the import the recipe reaches
+    second. A partial match must not end the search.
+    """
+    monkeypatch.setattr(
+        export, "sdk_candidates",
+        lambda: ["/opt/neat-insight/venv/bin/python3", "/opt/model-compiler/bin/python3"],
+    )
+    gaps = {
+        "/opt/neat-insight/venv/bin/python3": ["sima_utils"],
+        "/opt/model-compiler/bin/python3": [],
+    }
+    monkeypatch.setattr(export, "missing_recipe_requirements", lambda p: gaps[p])
+
+    assert export.choose_sdk_python() == ("/opt/model-compiler/bin/python3", [])
+
+
+def test_an_interpreter_needing_only_a_pip_install_is_still_usable(monkeypatch):
+    """It has the SDK; the rest is one command the message can name."""
+    monkeypatch.setattr(export, "sdk_candidates", lambda: ["/opt/sdk/bin/python3"])
+    monkeypatch.setattr(export, "missing_recipe_requirements", lambda p: ["onnxsim"])
+    assert export.choose_sdk_python() == ("/opt/sdk/bin/python3", ["onnxsim"])
+
+
+def test_a_complete_interpreter_beats_one_that_needs_installing(monkeypatch):
+    """Both can compile. Only one can compile now."""
+    monkeypatch.setattr(
+        export, "sdk_candidates", lambda: ["/opt/needs-pip/python3", "/opt/ready/python3"],
+    )
+    gaps = {"/opt/needs-pip/python3": ["onnxsim"], "/opt/ready/python3": []}
+    monkeypatch.setattr(export, "missing_recipe_requirements", lambda p: gaps[p])
+    assert export.choose_sdk_python()[0] == "/opt/ready/python3"
+
+
+def test_nothing_with_the_sdk_is_reported_as_nothing(monkeypatch):
+    monkeypatch.setattr(export, "sdk_candidates", lambda: ["/a/python", "/b/python"])
+    monkeypatch.setattr(export, "missing_recipe_requirements", lambda p: ["afe", "sima_utils"])
+    assert export.choose_sdk_python() == (None, [])
+    assert export.model_sdk_python() is None
+    assert export.model_sdk_present() is False
 
 
 def test_the_same_interpreter_under_two_names_is_probed_once(monkeypatch):
@@ -698,17 +752,6 @@ def test_the_same_interpreter_under_two_names_is_probed_once(monkeypatch):
     monkeypatch.setenv("VIRTUAL_ENV", str(Path(sys.executable).parent.parent))
     monkeypatch.setattr(shutil, "which", lambda name: sys.executable)
     assert export.sdk_candidates().count(sys.executable) == 1
-
-
-def test_the_first_interpreter_with_the_sdk_is_the_one_used(monkeypatch):
-    monkeypatch.setattr(
-        export, "sdk_candidates", lambda: ["/no/sdk/python", "/has/sdk/python"],
-    )
-    monkeypatch.setattr(
-        export, "has_model_sdk", lambda python: python == "/has/sdk/python",
-    )
-    assert export.model_sdk_python() == "/has/sdk/python"
-    assert export.model_sdk_present() is True
 
 
 def test_giving_up_says_which_interpreters_were_asked(monkeypatch):

@@ -48,10 +48,9 @@ from .export import (
     COMPILE_LOG,
     DEFAULT_IMGSZ,
     DEFAULT_OPSET,
+    choose_sdk_python,
     compile_recipe,
     export_onnx,
-    missing_recipe_requirements,
-    model_sdk_python,
     next_steps,
     requirements_help,
     run_recipe,
@@ -484,7 +483,7 @@ def run_compile(args) -> int:
         # sima-vision` and `activate-model-compiler` land in different
         # virtualenvs often enough that asking only about this interpreter
         # stopped compiles on machines that could have finished them.
-        sdk_python = model_sdk_python()
+        sdk_python, absent = choose_sdk_python()
         if sdk_python is None:
             recipe_path = write_recipe(out_dir, step)
             step.done("stopped at the ONNX: no python here can import `afe`")
@@ -492,10 +491,9 @@ def run_compile(args) -> int:
             return 0
         step.detail(f"Model SDK: {sdk_python}")
 
-        # Before the pack download, not after: 21 MB spent to discover that
-        # the interpreter cannot run what is inside it is 21 MB wasted, and
-        # the answer is known without spending any of it.
-        absent = missing_recipe_requirements(sdk_python)
+        # Reported before the pack download, not after: 21 MB spent to
+        # discover that the interpreter cannot run what is inside it is 21 MB
+        # wasted, and the answer was known without spending any of it.
         if absent:
             step.done("stopped at the ONNX: the compile's own imports are not all here")
             console.warn(requirements_help(absent, sdk_python))

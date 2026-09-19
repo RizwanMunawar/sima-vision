@@ -700,40 +700,79 @@ def requirements_help(missing: list[str], python: str) -> str:
     return text.rstrip()
 
 
+#: The modules that come with the Model SDK. Neither is on PyPI, so an
+#: interpreter missing either is the wrong interpreter rather than an
+#: under-equipped one -- `afe` alone is not enough, which is exactly how
+#: /opt/neat-insight/venv/bin/python3 got picked and reported as the SDK.
+SDK_MODULES = ("afe", "sima_utils")
+
+#: Roots a container keeps virtualenvs under. `/sdk-extensions` is not a
+#: guess: it is where the SiMa Neat SDK image puts the model compiler, and
+#: searching only /opt and /usr/local walked straight past it while finding
+#: neat-insight's -- which has `afe` and not the rest of the SDK.
+SDK_VENV_ROOTS = ("/sdk-extensions", "/opt", "/usr/local", "/srv")
+
+#: Two levels under each root, which covers both `<root>/<venv>/bin/python3`
+#: and `<root>/<name>/venv/bin/python3`.
+SDK_VENV_GLOBS = tuple(
+    f"{root}/{depth}bin/python3"
+    for root in SDK_VENV_ROOTS
+    for depth in ("*/", "*/*/")
+)
+
+#: A ceiling on how many interpreters get probed. Each one is a subprocess, and
+#: a glob over /opt on an unfamiliar image can match more than is worth paying
+#: for. Ordered best-guess-first, so the cut falls on the least likely.
+MAX_CANDIDATES = 16
+
+
 def sdk_candidates() -> list[str]:
     """Interpreters that might be able to run a compile, best guess first.
 
     The recipe runs as a subprocess, so the Model SDK never has to be
     importable *here* -- only in whichever python runs it. That makes the
-    question "is there a python on this machine that has afe", not "can I
-    import afe", and in the container those are routinely different answers:
-    `pip install sima-vision` into one virtualenv and `activate-model-compiler`
-    switching to another is all it takes. Asking the narrow question is how a
-    machine that could finish the job reported that it could not.
+    question "which python on this machine has the SDK", not "can I import
+    afe", and in a container those are routinely different answers: `pip
+    install sima-vision` into one virtualenv and `activate-model-compiler`
+    switching to another is all it takes.
     """
+    import glob
     import os
     import shutil
     import sys
 
     venv = os.environ.get("VIRTUAL_ENV")
+    override = os.environ.get(MODEL_SDK_PYTHON_ENV)
     guesses = [
-        os.environ.get(MODEL_SDK_PYTHON_ENV),
-        sys.executable,
-        # What `activate-model-compiler` activates, which is the point of
-        # running it: the SDK is in the virtualenv it switches to.
+        override,
+        # The activated virtualenv before this interpreter: running
+        # `activate-model-compiler` is someone saying which one they mean.
         str(Path(venv) / "bin" / "python") if venv else None,
+        sys.executable,
         shutil.which("python3"),
         shutil.which("python"),
     ]
+    # Every python on PATH, not just the first. `shutil.which` stops at one,
+    # and the SDK's virtualenv can sit behind another on the same PATH.
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if directory:
+            guesses += [str(Path(directory) / name) for name in ("python3", "python")]
+    for pattern in SDK_VENV_GLOBS:
+        guesses += sorted(glob.glob(pattern))
+
     seen: set[str] = set()
     candidates: list[str] = []
     for python in guesses:
-        if not python:
+        # A guess that is not there is not worth a subprocess -- except one
+        # the user typed. Quietly dropping an interpreter someone named by
+        # hand turns their instruction into silence; probing it says what is
+        # wrong with the path they gave.
+        if not python or (python != override and not Path(python).exists()):
             continue
-        # Resolved for the comparison only. Two names for one interpreter is
-        # the normal case here -- `python`, `python3` and the venv's own are
-        # usually the same file -- and probing it three times is three imports
-        # of a heavy package to learn one thing.
+        # Resolved for the comparison only. One interpreter under several names
+        # is the normal case here -- `python`, `python3` and the venv's own are
+        # usually one file -- and probing it three times is three subprocesses
+        # to learn one thing.
         try:
             key = str(Path(python).resolve())
         except OSError:  # pragma: no cover - an unreadable path is not a python
@@ -741,20 +780,46 @@ def sdk_candidates() -> list[str]:
         if key not in seen:
             seen.add(key)
             candidates.append(python)
+        if len(candidates) >= MAX_CANDIDATES:
+            break
     return candidates
 
 
 def has_model_sdk(python: str) -> bool:
-    """Whether *python* can import the Model SDK."""
-    return not missing_in(python, [SDK_MODULE])
+    """Whether *python* has the whole Model SDK, not merely part of it."""
+    return not missing_in(python, SDK_MODULES)
+
+
+def choose_sdk_python() -> tuple[str | None, list[str]]:
+    """The interpreter to compile with, and what it is still missing.
+
+    An interpreter counts only if it has *all* of :data:`SDK_MODULES`. Taking
+    the first one with `afe` is how a neat-insight virtualenv was announced as
+    the Model SDK and then failed on `sima_utils` -- a half-match is not a
+    match, and stopping at one hides the real interpreter further down the list.
+
+    Among those that qualify, one needing no `pip install` beats one that does.
+
+    Returns:
+        ``(python, missing)``. *missing* is the pip-installable remainder, so
+        an empty list means ready to compile. ``(None, [])`` means nothing here
+        has the SDK at all.
+    """
+    best: tuple[str | None, list[str]] = (None, [])
+    for python in sdk_candidates():
+        missing = missing_recipe_requirements(python)
+        if any(name in SDK_MODULES for name in missing):
+            continue
+        if not missing:
+            return python, []
+        if best[0] is None or len(missing) < len(best[1]):
+            best = (python, missing)
+    return best
 
 
 def model_sdk_python() -> str | None:
-    """A python that can compile, or None when this machine has none."""
-    for python in sdk_candidates():
-        if has_model_sdk(python):
-            return python
-    return None
+    """A python that has the whole Model SDK, or None when none here does."""
+    return choose_sdk_python()[0]
 
 
 def model_sdk_present() -> bool:
@@ -783,10 +848,21 @@ def next_steps(onnx_path: Path, recipe_path: Path | None,
     )
     searched = ""
     if tried:
-        searched = "\n  Asked each of these for `afe`, and none of them has it:\n"
+        searched = (
+            "\n  Asked each of these for the Model SDK "
+            f"({', '.join(SDK_MODULES)}), and none has all of it:\n"
+        )
         searched += "".join(f"       {python}\n" for python in tried)
         searched += (
-            "  If the one that can is not in that list, name it and run this again:\n"
+            "  `afe` alone is not enough -- neat-insight's virtualenv has that "
+            "and not\n"
+            "  `sima_utils`. If the right interpreter is not listed, this finds "
+            "it:\n"
+            "       for p in /opt/*/bin/python3 /opt/*/*/bin/python3 "
+            "/usr/local/*/bin/python3; do\n"
+            "         $p -c 'import afe, sima_utils' 2>/dev/null && echo $p\n"
+            "       done\n"
+            "  Then name it and run this again:\n"
             f"       export {MODEL_SDK_PYTHON_ENV}=/path/to/that/python\n"
         )
     return (
