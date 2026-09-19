@@ -205,9 +205,12 @@ def draw_fps(frame, fps: float, draw) -> None:
 
     Args:
         frame: BGR image, modified in place.
-        fps: Frames per second to display.
+        fps: Frames per second to display. 0 means nothing has been measured
+            yet, and the badge is left off rather than showing a guess.
         draw: Visualization settings.
     """
+    if fps <= 0:
+        return
     cv2 = runtime.cv2
     scale = draw_scale(frame, draw)
     text_scale = (draw.hud_text_scale or draw.text_scale) * scale

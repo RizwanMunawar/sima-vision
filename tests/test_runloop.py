@@ -676,3 +676,42 @@ def test_a_complete_run_is_not_called_a_stall():
     message = source_stopped_message(stall_config(), stalled_pipeline(total=23), 23)
     assert "the run is complete" in message
     assert "In order of likelihood" not in message
+
+
+def test_the_badge_rate_is_measured_not_guessed():
+    """Nothing to show until frames have been timed; no stand-in value."""
+    from sima_vision.runloop import PipelineRate
+
+    rate = PipelineRate()
+    assert rate.fps() == 0.0
+    for i in range(3):
+        rate.add(i * 15.0, 0.0)
+    assert rate.fps() == 0.0, "two spans are not a measurement"
+
+
+def test_the_badge_rate_ignores_frames_the_recorder_held_up():
+    """A loop waiting on the encoder is not the pipeline running slowly.
+
+    Nor is the burst after it: the graph fills its queues during the wait, and
+    draining them looks far faster than the pipeline can produce.
+    """
+    from sima_vision.runloop import PipelineRate
+
+    rate = PipelineRate(window=10, settle=3)
+    now = 0.0
+    for _ in range(12):                  # the pipeline, unhindered: 50 fps
+        now += 20.0
+        rate.add(now, 0.0)
+    assert rate.fps() == pytest.approx(50.0)
+
+    now += 100.0
+    rate.add(now, 95.0)                  # the loop waited on the sinks
+    for _ in range(3):                   # and then drained a full queue
+        now += 1.0
+        rate.add(now, 0.0)
+    assert rate.fps() == pytest.approx(50.0), "neither the wait nor the burst counts"
+
+    for _ in range(10):
+        now += 25.0
+        rate.add(now, 0.0)
+    assert rate.fps() == pytest.approx(40.0), "and it follows the pipeline again after"

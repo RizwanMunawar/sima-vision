@@ -268,7 +268,7 @@ class SinkJob:
         stamp: Timing fields copied out of the source sample.
         frame: Untouched BGR frame.
         results: Whatever the task detected on it -- boxes, instances or tracks.
-        fps: Rate to print in the HUD badge.
+        fps: Pipeline frame rate for the HUD badge, 0 until measured.
     """
 
     index: int
