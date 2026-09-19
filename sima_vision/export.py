@@ -52,6 +52,7 @@ recipe back rather than paraphrasing it.
 from __future__ import annotations
 
 import tarfile
+import time
 from pathlib import Path
 
 #: Output names the board's box decoder expects, in the order a working pack's
@@ -76,6 +77,38 @@ DEFAULT_IMGSZ = 640
 #: ONNX opset. 17 is what the SDK's importer is happiest with, and it is late
 #: enough for everything a YOLO26 graph uses.
 DEFAULT_OPSET = 17
+
+#: What the export needs, and what installs each. ``onnx`` is the one that
+#: gets missed: torch only reaches for it at the *end* of the trace, so
+#: without an up-front check a missing one surfaces a minute in, from inside
+#: torch's exporter, reported as though the model were at fault. The Palette
+#: container has torch and ultralytics and does not have this.
+EXPORT_REQUIREMENTS = {
+    "torch": "torch",
+    "ultralytics": "ultralytics",
+    "onnx": "onnx",
+}
+
+
+def missing_requirements() -> list[str]:
+    """Which of the export's imports are not installed here.
+
+    Asked of the import system rather than by importing them: this runs
+    before torch is loaded, which is itself several seconds, and the answer
+    is wanted before that rather than after.
+    """
+    import importlib.util
+
+    missing = []
+    for module, package in EXPORT_REQUIREMENTS.items():
+        try:
+            found = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):  # a half-installed package
+            found = False
+        if not found:
+            missing.append(package)
+    return missing
+
 
 #: Name of the compile script inside a published pack.
 RECIPE_PREFIX = "archived_compile_script."
@@ -283,7 +316,8 @@ def export_failure(exc: Exception, head) -> RuntimeError:
 
 
 def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
-                opset: int = DEFAULT_OPSET) -> dict[str, tuple[int, ...]]:
+                opset: int = DEFAULT_OPSET,
+                on_line=None) -> dict[str, tuple[int, ...]]:
     """Write ``weights`` out as a raw-head ONNX at ``out``.
 
     Args:
@@ -291,6 +325,10 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
         out: Where to write the ONNX.
         imgsz: Square input side. The preprocess contract letterboxes to this.
         opset: ONNX opset version.
+        on_line: Called with a short line before each slow part. Importing
+            torch, loading the weights and tracing the graph are seconds to a
+            minute each, and which of the three is running is the difference
+            between a slow export and a stuck one.
 
     Returns:
         The output name to shape mapping actually produced.
@@ -299,19 +337,44 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
         RuntimeError: When torch or ultralytics is missing, the head is not one
             this can export, or the shapes come out wrong.
     """
+    def say(text: str) -> None:
+        if on_line is not None:
+            on_line(text)
+
+    missing = missing_requirements()
+    if missing:
+        needs = ", ".join(EXPORT_REQUIREMENTS.values())
+        verb = "is" if len(missing) == 1 else "are"
+        raise RuntimeError(
+            f"exporting a .pt needs {needs}, and {', '.join(missing)} {verb} not "
+            f"installed here.\n"
+            f"  pip install {' '.join(missing)}\n"
+            "  This is a step for your PC or the Palette container, not the DevKit."
+        )
+
+    say(f"importing {', '.join(EXPORT_REQUIREMENTS)}")
     try:
         import torch
         from ultralytics import YOLO
     except ImportError as exc:
         raise RuntimeError(
-            f"exporting a .pt needs torch and ultralytics, and {exc.name} is "
-            "not installed.\n  pip install ultralytics\n"
-            "  This is a step for your PC, not the DevKit."
+            # The preflight above catches this in the ordinary case. This is
+            # for the one it cannot see: a package that is importable but
+            # broken, whose spec is found and whose import still fails.
+            f"exporting a .pt needs {', '.join(EXPORT_REQUIREMENTS.values())}, and\n"
+            f"importing {exc.name} failed: {exc}\n"
+            f"  pip install --force-reinstall {exc.name}\n"
+            "  This is a step for your PC or the Palette container, not the DevKit."
         ) from exc
 
+    say(f"loading {weights.name}")
     net = YOLO(str(weights)).model.eval()
-    _, classes, masks = check_head(net)
+    levels, classes, masks = check_head(net)
+    head = type(net.model[-1]).__name__
+    say(f"head {head}: {levels} levels, {classes} classes, "
+        + (f"{masks} mask coefficients" if masks else "no mask branch"))
     wanted = expected_shapes(imgsz, classes, masks)
+    say(f"tracing at {imgsz}x{imgsz}, opset {opset}, {len(wanted)} raw outputs")
 
     out.parent.mkdir(parents=True, exist_ok=True)
     dummy = torch.zeros(1, 3, imgsz, imgsz)
@@ -330,6 +393,7 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
     except Exception as exc:
         raise export_failure(exc, net.model[-1]) from exc
 
+    say("checking every output against what the board's decoder reads")
     got = onnx_output_shapes(out)
     wrong = {
         name: (wanted[name], got.get(name))
@@ -378,8 +442,25 @@ def compile_recipe(pack: Path) -> str:
 PACK_GLOB = "**/*.tar.gz"
 
 
+#: How long the compile may go without a word before the run says it is still
+#: alive. afe's quantization phase is the quiet one: several minutes of nothing
+#: is indistinguishable from a hang, and a hang is what people assume.
+SILENCE_HEARTBEAT = 30.0
+
+#: Lines of the recipe's own output kept back for the error message. The useful
+#: part of an afe failure is the traceback it ends on, not where it began.
+TAIL_LINES = 40
+
+#: Where the recipe's full output is written, under the build directory. Kept
+#: whatever happens: a compile that worked is worth reading afterwards, and a
+#: compile that failed is worth pasting into an issue.
+COMPILE_LOG = "compile.log"
+
+
 def run_recipe(recipe: Path, onnx: Path, build_dir: Path,
-               timeout: int = 3600) -> Path:
+               timeout: int = 3600, on_line=None, on_silence=None,
+               log_path: Path | None = None,
+               python: str | None = None) -> Path:
     """Run a pack's own compile script on an ONNX, and return the pack it built.
 
     The script is SiMa's, shipped inside the pack for exactly this, and it takes
@@ -388,20 +469,40 @@ def run_recipe(recipe: Path, onnx: Path, build_dir: Path,
     tessellation layouts -- are the ones that produced a pack known to work, and
     a paraphrase of them would drift the first time SiMa changed one.
 
+    Its output is *streamed*, not collected. A compile takes ten to fifteen
+    minutes, and the version of this that captured it printed nothing for all of
+    them and then threw the whole lot away on success. Every line now goes to
+    ``on_line`` as it arrives and to the log either way.
+
     Args:
         recipe: The ``archived_compile_script.*.py`` written beside the ONNX.
         onnx: The raw-head ONNX to compile.
         build_dir: Where the recipe should put its output.
         timeout: Seconds to allow. Quantization is slow, so this is generous.
+        on_line: Called with each line of the recipe's output, without its
+            newline, as it is produced.
+        on_silence: Called with the seconds elapsed so far, every
+            :data:`SILENCE_HEARTBEAT` seconds in which the recipe said nothing.
+        log_path: Where to write the full output. Defaults to
+            :data:`COMPILE_LOG` inside *build_dir*.
+        python: The interpreter to run the recipe with. Defaults to this
+            one. It is the SDK that has to be importable to the recipe, not
+            to us, so this is what lets a sima-vision installed in one
+            virtualenv compile with the SDK in another.
 
     Returns:
         The pack the recipe produced.
 
     Raises:
-        RuntimeError: When the recipe fails, or finishes without a pack.
+        RuntimeError: When the recipe fails, times out, or finishes without a
+            pack. The log's path is named in all three.
     """
+    import os
+    import queue as queue_lib
     import subprocess
     import sys
+    import threading
+    from collections import deque
 
     # Absolute, every one of them. The recipe runs with cwd set to its own
     # directory, so a relative `build/compile_modelsdk.py` resolved against
@@ -410,35 +511,191 @@ def run_recipe(recipe: Path, onnx: Path, build_dir: Path,
     recipe, onnx, build_dir = (p.resolve() for p in (recipe, onnx, build_dir))
 
     before = {p.resolve() for p in build_dir.glob(PACK_GLOB)}
-    result = subprocess.run(  # noqa: S603
-        [sys.executable, str(recipe), "--model", str(onnx),
+    build_dir.mkdir(parents=True, exist_ok=True)
+    log = Path(log_path) if log_path is not None else build_dir / COMPILE_LOG
+
+    process = subprocess.Popen(  # noqa: S603
+        # `-u` and PYTHONUNBUFFERED both, because they catch different halves:
+        # the flag unbuffers this interpreter's own streams, the variable is
+        # what any interpreter afe spawns underneath reads. Without them the
+        # child's stdout is a pipe, which Python block-buffers at 8 KB, and a
+        # quarter of an hour of progress arrives in one burst at the end --
+        # which is the same as not streaming it at all.
+        [python or sys.executable, "-u", str(recipe), "--model", str(onnx),
          "--build-dir", str(build_dir)],
-        cwd=recipe.parent, check=False, capture_output=True,
-        text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        cwd=recipe.parent,
+        stdout=subprocess.PIPE,
+        # Merged rather than kept apart: afe writes progress to one and warnings
+        # to the other, and interleaved in the order they happened is the only
+        # way to see which step a warning belongs to.
+        stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
+
+    # A reader thread and a queue, rather than iterating the pipe here: reading
+    # it blocks, and a blocked reader cannot also notice that nothing has been
+    # said for two minutes. The thread only ever moves lines; every print still
+    # happens on this one, so nothing interleaves mid-line.
+    lines: queue_lib.Queue = queue_lib.Queue()
+
+    def pump() -> None:
+        try:
+            for line in process.stdout:  # type: ignore[union-attr]
+                lines.put(line)
+        finally:
+            lines.put(None)
+
+    reader = threading.Thread(target=pump, name="compile-output", daemon=True)
+    reader.start()
+
+    tail: deque[str] = deque(maxlen=TAIL_LINES)
+    started = time.monotonic()
+    deadline = started + timeout
+    timed_out = False
+
+    with log.open("w", encoding="utf-8", errors="replace") as handle:
+        handle.write(
+            f"$ {python or sys.executable} {recipe} --model {onnx} "
+            f"--build-dir {build_dir}\n"
+        )
+        while True:
+            try:
+                line = lines.get(timeout=SILENCE_HEARTBEAT)
+            except queue_lib.Empty:
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    process.kill()
+                    break
+                if on_silence is not None:
+                    on_silence(time.monotonic() - started)
+                continue
+            if line is None:
+                break
+            text = line.rstrip("\r\n")
+            handle.write(text + "\n")
+            tail.append(text)
+            if on_line is not None:
+                on_line(text)
+            if time.monotonic() >= deadline:
+                timed_out = True
+                process.kill()
+                break
+
+    process.wait()
+    reader.join(timeout=5)
+
+    if timed_out:
+        raise RuntimeError(
+            f"the compile recipe ran past its {timeout // 60} minute limit and was "
+            f"stopped.\n  Everything it said is in {log}."
+        )
+
     made = sorted(
         (p for p in build_dir.glob(PACK_GLOB) if p.resolve() not in before),
         key=lambda p: p.stat().st_mtime,
     )
-    if result.returncode != 0:
-        tail = (result.stderr or result.stdout or "").strip().splitlines()[-6:]
+    if process.returncode != 0:
+        last = [text for text in tail if text.strip()][-6:]
         raise RuntimeError(
-            f"the compile recipe exited {result.returncode}.\n  "
-            + "\n  ".join(tail)
+            f"the compile recipe exited {process.returncode}.\n  "
+            + "\n  ".join(last)
+            + f"\n\n  The whole of it is in {log}."
         )
     if not made:
         raise RuntimeError(
             f"the recipe finished but produced no .tar.gz under {build_dir}.\n"
-            "  Its output is above; the pack is what this was for."
+            f"  It exited 0, so it believes it worked. What it actually did is in\n"
+            f"  {log}; the pack is what this was for."
         )
     return made[-1]
 
 
-def model_sdk_present() -> bool:
-    """Whether the SiMa Model SDK can be imported here."""
-    import importlib.util
+#: A python to run the compile with, when the one running this cannot. Set it
+#: to any interpreter that can import the Model SDK.
+MODEL_SDK_PYTHON_ENV = "SIMA_VISION_MODEL_SDK_PYTHON"
 
-    return importlib.util.find_spec("afe") is not None
+#: The Model SDK's top-level module. Importable only inside the container.
+SDK_MODULE = "afe"
+
+#: Asked of a candidate interpreter. `find_spec` rather than a plain import:
+#: the SDK is heavy, this runs up to four times, and whether it is *there* is
+#: the whole question.
+SDK_PROBE = (
+    "import importlib.util, sys; "
+    f"sys.exit(0 if importlib.util.find_spec({SDK_MODULE!r}) else 1)"
+)
+
+
+def sdk_candidates() -> list[str]:
+    """Interpreters that might be able to run a compile, best guess first.
+
+    The recipe runs as a subprocess, so the Model SDK never has to be
+    importable *here* -- only in whichever python runs it. That makes the
+    question "is there a python on this machine that has afe", not "can I
+    import afe", and in the container those are routinely different answers:
+    `pip install sima-vision` into one virtualenv and `activate-model-compiler`
+    switching to another is all it takes. Asking the narrow question is how a
+    machine that could finish the job reported that it could not.
+    """
+    import os
+    import shutil
+    import sys
+
+    venv = os.environ.get("VIRTUAL_ENV")
+    guesses = [
+        os.environ.get(MODEL_SDK_PYTHON_ENV),
+        sys.executable,
+        # What `activate-model-compiler` activates, which is the point of
+        # running it: the SDK is in the virtualenv it switches to.
+        str(Path(venv) / "bin" / "python") if venv else None,
+        shutil.which("python3"),
+        shutil.which("python"),
+    ]
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for python in guesses:
+        if not python:
+            continue
+        # Resolved for the comparison only. Two names for one interpreter is
+        # the normal case here -- `python`, `python3` and the venv's own are
+        # usually the same file -- and probing it three times is three imports
+        # of a heavy package to learn one thing.
+        try:
+            key = str(Path(python).resolve())
+        except OSError:  # pragma: no cover - an unreadable path is not a python
+            key = python
+        if key not in seen:
+            seen.add(key)
+            candidates.append(python)
+    return candidates
+
+
+def has_model_sdk(python: str) -> bool:
+    """Whether *python* can import the Model SDK."""
+    import subprocess
+
+    try:
+        result = subprocess.run(  # noqa: S603
+            [python, "-c", SDK_PROBE],
+            capture_output=True, timeout=120, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def model_sdk_python() -> str | None:
+    """A python that can compile, or None when this machine has none."""
+    for python in sdk_candidates():
+        if has_model_sdk(python):
+            return python
+    return None
+
+
+def model_sdk_present() -> bool:
+    """Whether anything here can run a compile."""
+    return model_sdk_python() is not None
 
 
 def next_steps(onnx_path: Path, recipe_path: Path | None) -> str:
@@ -467,7 +724,7 @@ def next_steps(onnx_path: Path, recipe_path: Path | None) -> str:
         "\n"
         f"  1. Start Palette, and mount the directory holding {onnx_path.name}.\n"
         "  2. Inside it, install what the recipe imports:\n"
-        "       pip install onnx onnxsim numpy\n"
+        '       pip install "sima-vision[compile]"\n'
         f"{recipe}"
         "  4. Or simply run this command again in there: with the SDK importable "
         "it does\n     every step and writes the pack itself.\n"

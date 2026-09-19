@@ -35,15 +35,17 @@ from __future__ import annotations
 import argparse
 import os
 import tarfile
+import time
 from pathlib import Path
 
 from . import __version__
 from .assets import default_model_path, ensure_model, models_dir
 from .bootstrap import detect_environment, ensure_runtime
 from .config import DECODER_TUNINGS, VIDEO_ENCODERS
-from .console import console, human_bytes
+from .console import console, human_bytes, human_time
 from .devkit import DEVKIT_ENV, run_pull, run_push
 from .export import (
+    COMPILE_LOG,
     DEFAULT_IMGSZ,
     DEFAULT_OPSET,
     compile_recipe,
@@ -413,6 +415,41 @@ def collect_overrides(args: argparse.Namespace) -> dict:
     }
 
 
+class Narration:
+    """One long-running thing's own output, line by line, under a step.
+
+    Every line is stamped with how long that thing has been going. A compile
+    takes ten to fifteen minutes, and the stamps are what separate a slow phase
+    from a stuck one while it runs -- and afterwards, what says which phase to
+    blame. Dimmed, because it is the SDK talking and not this program.
+    """
+
+    def __init__(self, step) -> None:
+        self.step = step
+        self.started = time.perf_counter()
+        self.lines = 0
+
+    @property
+    def elapsed(self) -> float:
+        return time.perf_counter() - self.started
+
+    def line(self, text: str) -> None:
+        """One line of output. Counted always; shown unless it is blank.
+
+        Counted before the blank check, so the total this reports is the log's
+        own length rather than the number of lines that happened to be worth
+        printing.
+        """
+        self.lines += 1
+        if not text.strip():
+            return
+        self.step.note(f"{human_time(self.elapsed):>6}  {text}")
+
+    def silence(self, elapsed: float) -> None:
+        """Nothing said for a while. Says so, rather than looking hung."""
+        self.step.note(f"{human_time(elapsed):>6}  still working")
+
+
 def run_compile(args) -> int:
     """``compile`` -- export, then compile if the Model SDK is here."""
     console.banner(f"sima-vision {__version__}", "compile")
@@ -427,10 +464,13 @@ def run_compile(args) -> int:
             "the board decodes boxes itself, so the head's raw tensors are exported\n"
             "rather than ultralytics' assembled [1, 84, 8400] output"
         )
-        shapes = export_onnx(weights, onnx_path, args.imgsz, args.opset)
+        narration = Narration(step)
+        shapes = export_onnx(
+            weights, onnx_path, args.imgsz, args.opset, on_line=narration.line,
+        )
         for name, shape in shapes.items():
             step.detail(f"{name:<16} {tuple(shape)}")
-        step.done(f"{onnx_path} ({human_bytes(onnx_path.stat().st_size)})")
+        step.done(f"{onnx_path} ({human_bytes(onnx_path.stat().st_size)})", timed=True)
 
     with console.step("Compiling the DevKit pack", "compile") as step:
         # The two halves fail for different reasons and want different answers,
@@ -448,10 +488,20 @@ def run_compile(args) -> int:
             console.warn(next_steps(onnx_path, None))
             return 0
 
-        step.note("quantizing and tessellating. This takes a few minutes.")
-        pack = run_recipe(recipe_path, onnx_path, out_dir)
+        log_path = out_dir / COMPILE_LOG
+        step.note(
+            "quantizing to bfloat16, calibrating, tessellating for the MLA and\n"
+            "emitting the ELF. Ten to fifteen minutes is normal."
+        )
+        step.note(f"every line below is the recipe's own, and all of it lands in {log_path}")
+        narration = Narration(step)
+        pack = run_recipe(
+            recipe_path, onnx_path, out_dir,
+            on_line=narration.line, on_silence=narration.silence,
+        )
+        step.detail(f"{narration.lines} lines of compiler output -> {log_path}")
         finish_pack(pack, step)
-        step.done(f"{pack} ({human_bytes(pack.stat().st_size)})")
+        step.done(f"{pack} ({human_bytes(pack.stat().st_size)})", timed=True)
 
     console.report(f"run it with:  sima-vision detect --model {pack.name}")
     console.report(f"send it over: sima-vision push {pack}")
@@ -511,9 +561,15 @@ def write_recipe(out_dir: Path, step, fetch_if_missing: bool = False) -> Path | 
             step.note(str(exc))
         pack = reference_pack()
     if pack is None:
+        # The common way to land here is a fresh Palette container: the Model
+        # SDK is importable, so the compile is one file away from finishing, and
+        # the file it needs lives inside a published pack that only `sima-cli`
+        # can fetch -- which the container's own venv does not have.
         step.note(
-            "no model pack here to copy a recipe from. Any real run fetches one,\n"
-            "and the recipe comes inside it."
+            f"no model pack in {models_dir()} to copy a recipe from, and the recipe\n"
+            "comes inside one. Either of these gets you one:\n"
+            "  pip install sima-cli && sima-cli login   # then run this again\n"
+            "  sima-vision push <any pack>              # from a machine that has one"
         )
         return None
     try:

@@ -8,6 +8,7 @@ import pytest
 
 from sima_vision import __version__
 from sima_vision.cli import build_parser, collect_overrides, main
+from sima_vision.console import console
 from sima_vision.tasks import TASKS
 
 REPO = Path(__file__).resolve().parents[1]
@@ -216,3 +217,21 @@ def test_validate_prints_through_the_console(capsys):
     out = capsys.readouterr().out
     assert "config OK" in out
     assert "nothing was downloaded" in out
+
+
+def test_an_error_that_names_itself_is_not_headed_twice(capsys):
+    """ultralytics prefixes its own messages, and a bad .pt is the common one.
+
+    It came out as `ERROR  ERROR  best.pt is not a loadable checkpoint`, which
+    reads as a bug in this program rather than a problem with the file.
+    """
+    console.error("ERROR  best.pt is not a loadable checkpoint")
+    err = capsys.readouterr().err
+    assert err.count("ERROR") == 1
+    assert "best.pt is not a loadable checkpoint" in err
+
+
+def test_an_ordinary_error_still_gets_its_heading(capsys):
+    console.error("no such file: best.pt")
+    err = capsys.readouterr().err
+    assert "ERROR" in err and "no such file: best.pt" in err

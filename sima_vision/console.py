@@ -362,9 +362,18 @@ class Console:
             self.write(f"  {head}  {line}", force=True)
 
     def error(self, text: str) -> None:
-        """Errors go to stderr, always, whatever --quiet says."""
+        """Errors go to stderr, always, whatever --quiet says.
+
+        A message that already calls itself an error does not get told twice.
+        ultralytics prefixes its own with `ERROR`, so a bad checkpoint arrived
+        as `ERROR  ERROR  best.pt is not a loadable checkpoint` -- this lands
+        in front of other people's messages often enough to be worth the check.
+        """
         style = Style(want_color(sys.stderr))
-        for n, line in enumerate(str(text).splitlines() or [""]):
+        body = str(text).lstrip()
+        if body[:5].upper() == "ERROR":
+            body = body[5:].lstrip(" :	") or str(text)
+        for n, line in enumerate(body.splitlines() or [""]):
             head = style.paint("ERROR", style.red) if n == 0 else "     "
             print(f"  {head}  {line}", file=sys.stderr, flush=True)
 

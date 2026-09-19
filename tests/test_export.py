@@ -403,6 +403,177 @@ def test_a_pack_that_was_already_there_is_not_claimed_as_new(tmp_path):
     (build / "stale_mpk.tar.gz").write_bytes(b"old")
     with pytest.raises(RuntimeError, match="no .tar.gz"):
         export.run_recipe(make_recipe(tmp_path, "pass"), tmp_path / "x.onnx", build)
+# -- what the export needs, asked before it needs it --
+
+def test_a_missing_onnx_is_caught_before_the_trace(tmp_path, monkeypatch):
+    """The Palette container has torch and ultralytics and no onnx.
+
+    torch only reaches for onnx at the *end* of the trace, so this arrived a
+    minute in, as `OnnxExporterError: Module onnx is not installed!` wrapped in
+    "the export failed inside the model" -- naming the model, which was fine,
+    and not naming the one command that fixes it.
+    """
+    import importlib.util
+
+    real = importlib.util.find_spec
+
+    def without_onnx(name, *args, **kwargs):
+        return None if name == "onnx" else real(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", without_onnx)
+    assert export.missing_requirements() == ["onnx"]
+
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"not really a checkpoint")
+    with pytest.raises(RuntimeError) as caught:
+        export.export_onnx(weights, tmp_path / "best-raw.onnx")
+
+    message = str(caught.value)
+    assert "onnx is not" in message
+    assert "pip install onnx" in message
+    # Naming the wrong machine is how someone ends up installing it on the board.
+    assert "not the DevKit" in message
+
+
+def test_the_preflight_names_every_missing_package_at_once(monkeypatch):
+    """Three round trips through a container install is two too many."""
+    import importlib.util
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: None)
+    assert export.missing_requirements() == ["torch", "ultralytics", "onnx"]
+
+
+def test_the_export_does_not_start_by_loading_torch(tmp_path, monkeypatch):
+    """The check has to come first to be worth having.
+
+    Importing torch is several seconds. Asked afterwards, the answer arrives
+    after exactly the wait it exists to avoid.
+    """
+    import importlib.util
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: None)
+    monkeypatch.setitem(
+        __import__("sys").modules, "torch", None,  # any use of it would raise
+    )
+    with pytest.raises(RuntimeError, match="pip install torch"):
+        export.export_onnx(tmp_path / "missing.pt", tmp_path / "out.onnx")
+
+
+# -- the compile narrates itself --
+
+#: Prints, pauses long enough to count as silence, prints again, writes a pack.
+#: The pause is what a real compile does for minutes at a time in quantization.
+CHATTY_RECIPE = '''
+import argparse
+import pathlib
+import sys
+import time
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model")
+parser.add_argument("--build-dir")
+args = parser.parse_args()
+
+print("afe: importing the ONNX graph")
+sys.stderr.write("afe WARNING: operator Resize falls back to CVU" + chr(10))
+time.sleep(0.35)
+print("afe: tessellating for the MLA")
+
+out = pathlib.Path(args.build_dir) / "best_mpk.tar.gz"
+out.write_bytes(b"pack")
+'''
+
+
+def test_the_recipes_output_arrives_while_it_runs(tmp_path, monkeypatch):
+    """A compile is ten to fifteen minutes of someone else's program.
+
+    Captured, as this was, it printed nothing for all of them and then threw
+    the lot away on success -- so the only two states a user could see were
+    "no output yet" and "done", which are the same state as "hung".
+    """
+    monkeypatch.setattr(export, "SILENCE_HEARTBEAT", 0.1)
+    build = tmp_path / "build"
+    build.mkdir()
+    onnx = tmp_path / "best-raw.onnx"
+    onnx.write_bytes(b"onnx")
+
+    seen: list[str] = []
+    quiet: list[float] = []
+    pack = export.run_recipe(
+        make_recipe(tmp_path, CHATTY_RECIPE), onnx, build,
+        on_line=seen.append, on_silence=quiet.append,
+    )
+
+    assert pack.name == "best_mpk.tar.gz"
+    # Both streams, in the order they happened. afe writes progress to one and
+    # warnings to the other, and which step a warning belongs to is the order.
+    assert seen[0] == "afe: importing the ONNX graph"
+    assert "falls back to CVU" in seen[1]
+    assert seen[-1] == "afe: tessellating for the MLA"
+    # The pause between them was noticed rather than sat through in silence.
+    assert quiet, "a recipe that says nothing for a while must still say so"
+
+
+def test_every_line_is_kept_in_the_log(tmp_path):
+    """The terminal scrolls; a compile worth debugging is worth a file."""
+    build = tmp_path / "build"
+    build.mkdir()
+    onnx = tmp_path / "best-raw.onnx"
+    onnx.write_bytes(b"onnx")
+
+    export.run_recipe(make_recipe(tmp_path, CHATTY_RECIPE), onnx, build)
+
+    log = (build / export.COMPILE_LOG).read_text(encoding="utf-8")
+    assert "afe: importing the ONNX graph" in log
+    assert "falls back to CVU" in log
+    assert "afe: tessellating for the MLA" in log
+    # The command itself, so the log says what produced it.
+    assert "--build-dir" in log.splitlines()[0]
+
+
+def test_a_failing_recipe_says_where_the_rest_of_it_is(tmp_path):
+    """Six lines of tail is the summary. The answer is usually above them."""
+    build = tmp_path / "build"
+    build.mkdir()
+    with pytest.raises(RuntimeError) as caught:
+        export.run_recipe(
+            make_recipe(tmp_path, FAILING_RECIPE), tmp_path / "x.onnx", build
+        )
+
+    message = str(caught.value)
+    assert export.COMPILE_LOG in message
+    log = (build / export.COMPILE_LOG).read_text(encoding="utf-8")
+    assert "quantizing" in log and "unsupported operator Foo" in log
+
+
+#: Never returns. A compile that wedges is indistinguishable from a slow one
+#: until the limit, which is the whole reason the limit exists.
+HANGING_RECIPE = '''
+import argparse
+import time
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model")
+parser.add_argument("--build-dir")
+parser.parse_args()
+
+print("afe: importing the ONNX graph", flush=True)
+time.sleep(600)
+'''
+
+
+def test_a_compile_that_wedges_is_stopped_and_said_so(tmp_path, monkeypatch):
+    """Without this the run waits the full hour holding an open step."""
+    monkeypatch.setattr(export, "SILENCE_HEARTBEAT", 0.1)
+    build = tmp_path / "build"
+    build.mkdir()
+
+    with pytest.raises(RuntimeError, match="was stopped"):
+        export.run_recipe(
+            make_recipe(tmp_path, HANGING_RECIPE), tmp_path / "x.onnx", build,
+            timeout=1,
+        )
+    assert (build / export.COMPILE_LOG).is_file()
 
 
 def test_the_guidance_names_the_module_it_looked_for():
