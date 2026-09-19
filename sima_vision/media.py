@@ -855,6 +855,35 @@ def check_source_support(cfg) -> None:
     )
 
 
+def default_tuned_decoder(num_buffers: int) -> str:
+    """``SimaDecode``'s fragment, with ``decoder-tuning=default`` actually set.
+
+    Left unset, ``neatdecoder`` runs its ``auto`` tuning, which on a file
+    discards decoded pictures whenever its output pool runs dry instead of
+    waiting for a buffer to come back. On the sample clip 245 of 379 frames
+    reached a plain fakesink, in runs of about eleven with gaps of about nine,
+    and nothing downstream can see the holes because the frames carry no
+    timestamps. That is the choppy recording. It is also the ~195 frame
+    "stall": the source was not stopping early, it was reaching the end of the
+    file having thrown a third of it away. ``default`` applies backpressure
+    instead and hands over every picture, in presentation order.
+
+    Neat 0.4.0 cannot ask for it. ``SimaDecode`` and decoder admission both
+    treat ``"default"`` as "leave the property alone", and the element's own
+    default is ``auto``. So the decoder goes in as a custom node, with the
+    same properties ``SimaDecode`` would have written plus the one it drops.
+
+    Args:
+        num_buffers: Output pool size, or 0 to let the element choose.
+    """
+    pool = f" num-buffers={num_buffers}" if num_buffers > 0 else ""
+    return (
+        f"neatdecoder sima-allocator-type=2 dec-type=h264 dec-fmt=NV12{pool} "
+        "decoder-tuning=default ! videoconvert ! "
+        'capsfilter caps="video/x-raw(memory:SystemMemory),format=NV12"'
+    )
+
+
 def make_elementary_h264_source(cfg, width: int, height: int, fps: int):
     """Build a file source chain without a demuxer.
 
@@ -902,14 +931,11 @@ def make_elementary_h264_source(cfg, width: int, height: int, fps: int):
     requested = decoder_buffers_for(cfg, width, height)
     if requested > 0:
         dec.num_buffers = requested
-    # Left empty, neatdecoder runs its `auto` tuning, which silently discards
-    # decoded pictures on a file: 245 of 379 reached a plain fakesink on the
-    # sample clip, in bursts, with no timestamps to show the gaps. That is the
-    # choppy recording, and the ~195 frame "stall" too -- the source was not
-    # stopping early, it was reaching the end of the file having thrown half
-    # of it away. `default` hands over every picture, in presentation order.
-    dec.decoder_tuning = cfg.decoder_tuning
-    graph.add(pyneat.nodes.sima_decode(dec))
+    if cfg.decoder_tuning == "default":
+        graph.add(pyneat.nodes.custom(default_tuned_decoder(requested)))
+    else:
+        dec.decoder_tuning = cfg.decoder_tuning
+        graph.add(pyneat.nodes.sima_decode(dec))
 
     # No CapsRaw node here, deliberately, and this is the difference between a
     # run that finishes the clip and one that dies on a pull timeout part-way
