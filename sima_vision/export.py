@@ -152,6 +152,88 @@ class RawHead:
         return False
 
 
+#: Attributes a C2PSA attention block carries. Checked rather than the class
+#: imported: ultralytics moves these between modules across releases, and a
+#: block that walks and talks like one is one.
+ATTENTION_PARTS = ("qkv", "proj", "pe", "num_heads", "key_dim", "head_dim", "scale")
+
+
+def is_attention(module) -> bool:
+    """Whether *module* is a C2PSA-style attention block."""
+    return all(hasattr(module, name) for name in ATTENTION_PARTS)
+
+
+class SupportedAttention:
+    """Swap attention's batched matmuls for einsum, for the export only.
+
+    The MLA cannot take either half of how ultralytics writes this. The
+    reshape that splits channels into heads moves the batch axis --
+    ``Reshape affecting the batch axis is not supported`` -- and
+    ``(q * scale).transpose(-2, -1) @ k`` on a 4-D tensor becomes a
+    ``batch_matmul`` whose batch is the head count rather than 1::
+
+        Cannot assign node nn.batch_matmul_107 ... to MLA. ['Unsupported']
+        Cannot assign node transpose_106 ... ['Zero axis of the input shape
+        must have a value of 1']
+
+    afe then splits the graph around them. A YOLO26-seg went from one MLA
+    segment to nine, mixing in 76 EV74 plugins and 4 A65 ones, and the pack
+    that came out had no ``preproc`` stage at all -- which the board's
+    preprocess planner needs, so it refused to load the model::
+
+        preprocess planner: MPK contract is missing an MLA stage for pre
+        route selection.
+
+    Written as einsum, both contractions are single operations over explicit
+    axes, with the batch axis named and left alone. This is not a guess about
+    what the MLA likes: SiMa's own published YOLO26 pack was compiled from an
+    ONNX called ``yolo26n_raw_supported_einsum``, and it has one MLA segment
+    and thirteen plugins to this one's eighty-five.
+
+    The arithmetic is unchanged -- the same contractions over the same axes in
+    the same order. Checked against the original on this repo's own weights:
+    the outputs are bit-identical, not merely close.
+    """
+
+    def __init__(self, net) -> None:
+        self.modules = [m for m in net.modules() if is_attention(m)]
+        self.originals: list = []
+
+    def rewritten(self, module):
+        """``module``'s forward, with both matmuls expressed as einsum."""
+        import torch
+
+        def forward(x):
+            batch, channels, height, width = x.shape
+            pixels = height * width
+            qkv = module.qkv(x)
+            q, k, v = qkv.view(
+                batch, module.num_heads, module.key_dim * 2 + module.head_dim, pixels
+            ).split([module.key_dim, module.key_dim, module.head_dim], dim=2)
+
+            # (q * scale).transpose(-2, -1) @ k, contracting the key axis.
+            attn = torch.einsum("bhdn,bhdm->bhnm", q * module.scale, k)
+            attn = attn.softmax(dim=-1)
+            # v @ attn.transpose(-2, -1), contracting attn's second pixel axis.
+            out = torch.einsum("bhdm,bhnm->bhdn", v, attn)
+
+            out = out.reshape(batch, channels, height, width)
+            return module.proj(out + module.pe(v.reshape(batch, channels, height, width)))
+
+        return forward
+
+    def __enter__(self) -> SupportedAttention:
+        self.originals = [m.forward for m in self.modules]
+        for module in self.modules:
+            module.forward = self.rewritten(module)
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        for module, original in zip(self.modules, self.originals, strict=True):
+            module.forward = original
+        return False
+
+
 def head_branches(head) -> tuple:
     """The three branches a prediction actually comes out of.
 
@@ -378,8 +460,12 @@ def export_onnx(weights: Path, out: Path, imgsz: int = DEFAULT_IMGSZ,
 
     out.parent.mkdir(parents=True, exist_ok=True)
     dummy = torch.zeros(1, 3, imgsz, imgsz)
+    attention = SupportedAttention(net)
+    if attention.modules:
+        say(f"rewriting {len(attention.modules)} attention blocks as einsum, "
+            "which the MLA can take")
     try:
-        with RawHead(net), torch.no_grad():
+        with RawHead(net), attention, torch.no_grad():
             torch.onnx.export(
                 net,
                 dummy,
