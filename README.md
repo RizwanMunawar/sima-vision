@@ -119,6 +119,7 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--sink-queue-mb MB` | all | Memory budget for that backlog, which grows it to fit a known clip |
 | `--output-buffers N` | all | Buffers each public output may hold. Default `1` |
 | `--decoder-buffers N` | all | Buffers to ask the decoder for. Default `0`, sized from the stream's reference frames |
+| `--decoder-tuning` | all | Hardware decoder preset. Default `default`, which keeps every frame; `auto` drops frames in bursts |
 | `--segment-frames N` | all | Frames per piece when a clip is too long for one decode. Default `150`; `0` runs it whole |
 | `--blur` / `--no-blur` | `segment` | Blur the background and keep instances sharp, or draw a plain overlay |
 | `--blur-method` | `segment` | `gaussian`, `pixelate` or `none`. Default `gaussian` |

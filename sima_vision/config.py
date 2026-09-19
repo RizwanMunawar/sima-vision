@@ -37,6 +37,9 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 #: Labels used when nothing else resolves.
 PACKAGED_LABELS = PACKAGE_ROOT / "data" / "coco_labels.txt"
 
+#: ``neatdecoder``'s ``decoder-tuning`` values.
+DECODER_TUNINGS = ("default", "auto", "low-memory", "throughput-low-latency")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Scalar readers
@@ -523,6 +526,11 @@ class BaseConfig:
             pins it. A negative number leaves pyneat's own -1 in place, which
             is what the app did before and which lets the daemon pick 8 for
             1080p regardless of what the stream needs.
+        decoder_tuning: ``neatdecoder``'s ``decoder-tuning`` preset:
+            ``default``, ``auto``, ``low-memory`` or
+            ``throughput-low-latency``. ``default`` delivers every picture;
+            ``auto``, the element's own default, drops a third or more of a
+            file's pictures in bursts, which is what makes a recording choppy.
         decoder_pool: Decoded frames the hardware decoder's pool holds. The
             boot log prints the real number as ``BufferNum=`` when the decoder
             finds the stream's resolution, and it is per-resolution, so 8 is
@@ -602,6 +610,7 @@ class BaseConfig:
     sink_queue_mb: int = 1024
     decoder_pool: int = 8
     decoder_buffers: int = 0
+    decoder_tuning: str = "default"
     segment_frames: int = 150
     output_buffers: int = 1
     run_preset: str = "auto"
@@ -734,6 +743,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         sink_queue_mb=_int(runtime, "sink_queue_mb", 1024),
         decoder_pool=_int(runtime, "decoder_pool", 8),
         decoder_buffers=_int(runtime, "decoder_buffers", 0),
+        decoder_tuning=_str(runtime, "decoder_tuning", "default").lower(),
         segment_frames=_int(runtime, "segment_frames", 150),
         output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", defaults.run_preset).lower(),
@@ -817,6 +827,11 @@ def validate_base(cfg: BaseConfig) -> None:
         raise ValueError("runtime.sink_queue_mb must be >= 0")
     if cfg.decoder_pool < 1:
         raise ValueError("runtime.decoder_pool must be >= 1")
+    if cfg.decoder_tuning not in DECODER_TUNINGS:
+        raise ValueError(
+            f"runtime.decoder_tuning must be one of {', '.join(DECODER_TUNINGS)}, "
+            f"got {cfg.decoder_tuning!r}"
+        )
     if cfg.segment_frames < 0:
         raise ValueError("runtime.segment_frames must be >= 0")
     if cfg.pull_timeout_ms <= 0:

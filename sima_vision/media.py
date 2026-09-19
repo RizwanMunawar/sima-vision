@@ -902,6 +902,13 @@ def make_elementary_h264_source(cfg, width: int, height: int, fps: int):
     requested = decoder_buffers_for(cfg, width, height)
     if requested > 0:
         dec.num_buffers = requested
+    # Left empty, neatdecoder runs its `auto` tuning, which silently discards
+    # decoded pictures on a file: 245 of 379 reached a plain fakesink on the
+    # sample clip, in bursts, with no timestamps to show the gaps. That is the
+    # choppy recording, and the ~195 frame "stall" too -- the source was not
+    # stopping early, it was reaching the end of the file having thrown half
+    # of it away. `default` hands over every picture, in presentation order.
+    dec.decoder_tuning = cfg.decoder_tuning
     graph.add(pyneat.nodes.sima_decode(dec))
 
     # No CapsRaw node here, deliberately, and this is the difference between a

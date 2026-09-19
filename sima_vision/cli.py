@@ -40,6 +40,7 @@ from pathlib import Path
 from . import __version__
 from .assets import default_model_path, ensure_model, models_dir
 from .bootstrap import detect_environment, ensure_runtime
+from .config import DECODER_TUNINGS
 from .console import console, human_bytes
 from .devkit import DEVKIT_ENV, run_pull, run_push
 from .export import (
@@ -174,6 +175,13 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         help="Buffers to ask the hardware decoder for. Default 0, which sizes "
              "it from the stream's own reference frames -- the fix for a run "
              "that stops part-way through. Negative leaves pyneat to pick.",
+    )
+    run.add_argument(
+        "--decoder-tuning", dest="runtime.decoder_tuning",
+        choices=DECODER_TUNINGS,
+        help="Hardware decoder tuning preset. Default 'default', which hands "
+             "over every picture. 'auto' drops pictures in bursts on a file "
+             "and makes the recording choppy.",
     )
     run.add_argument(
         "--sink-queue-mb", dest="runtime.sink_queue_mb", type=int, metavar="MB",
