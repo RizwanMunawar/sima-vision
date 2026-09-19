@@ -40,6 +40,7 @@ from pathlib import Path
 from . import __version__
 from .assets import default_model_path, ensure_model, models_dir
 from .bootstrap import detect_environment, ensure_runtime
+from .config import DECODER_TUNINGS, VIDEO_ENCODERS
 from .console import console, human_bytes
 from .devkit import DEVKIT_ENV, run_pull, run_push
 from .export import (
@@ -145,9 +146,9 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     )
     run.add_argument(
         "--queue-depth", dest="runtime.queue_depth", type=int, metavar="N",
-        help="Depth of the Neat runtime's own queues. Every slot can hold a "
-             "decoded frame, so raising this makes a buffer-starved run worse, "
-             "not better. Default 1.",
+        help="Depth of the Neat runtime's own queues. Below 4 the graph drops "
+             "frames whenever the recorder slows the pull loop, which makes "
+             "the recording choppy. Default 4.",
     )
     run.add_argument(
         "--sink-queue-depth", dest="runtime.sink_queue_depth", type=int, metavar="N",
@@ -176,6 +177,13 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
              "that stops part-way through. Negative leaves pyneat to pick.",
     )
     run.add_argument(
+        "--decoder-tuning", dest="runtime.decoder_tuning",
+        choices=DECODER_TUNINGS,
+        help="Hardware decoder tuning preset. Default 'default', which hands "
+             "over every picture. 'auto' drops pictures in bursts on a file "
+             "and makes the recording choppy.",
+    )
+    run.add_argument(
         "--sink-queue-mb", dest="runtime.sink_queue_mb", type=int, metavar="MB",
         help="Host memory the sink backlog may use on a file source. The queue "
              "grows towards holding the whole clip so the pull loop never waits "
@@ -195,6 +203,15 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     out.add_argument(
         "--no-video", dest="output.video.enable", action="store_const", const=False,
         help="Do not record.",
+    )
+    out.add_argument(
+        "--video-encoder", dest="output.video.encoder", choices=VIDEO_ENCODERS,
+        help="'sima' encodes H.264 on the DevKit's hardware encoder; 'opencv' "
+             "uses OpenCV's software writer, about ten times slower. Default sima.",
+    )
+    out.add_argument(
+        "--video-bitrate", dest="output.video.bitrate_kbps", type=int, metavar="KBPS",
+        help="Target bitrate for the hardware encoder. Default 12000.",
     )
     out.add_argument(
         "--save-dir", dest="output.save.dir", metavar="DIR",

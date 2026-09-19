@@ -17,6 +17,7 @@ from pathlib import Path
 from . import runtime
 from .console import console, human_bytes
 from .neat import build_video_graph
+from .recorder import NeatVideoWriter
 from .runtime import time_ms
 from .samples import FrameStamp
 
@@ -117,6 +118,18 @@ def open_video_writer(cfg, width: int, height: int, fps: int):
     path = Path(cfg.video_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     out_fps = cfg.video_fps or fps or 25
+
+    if cfg.video_encoder == "sima":
+        try:
+            writer = NeatVideoWriter(
+                str(path.with_suffix(".mp4")), width, height, out_fps, cfg.video_bitrate_kbps
+            )
+            return writer, str(path.with_suffix(".mp4"))
+        except Exception as exc:
+            console.warn(
+                f"the hardware encoder could not be started ({exc}); "
+                "recording with OpenCV instead, which is much slower"
+            )
 
     fourcc = cv2.VideoWriter_fourcc(*cfg.video_codec)
     writer = cv2.VideoWriter(str(path), fourcc, float(out_fps), (width, height))
@@ -268,7 +281,7 @@ class SinkJob:
         stamp: Timing fields copied out of the source sample.
         frame: Untouched BGR frame.
         results: Whatever the task detected on it -- boxes, instances or tracks.
-        fps: Rate to print in the HUD badge.
+        fps: Pipeline frame rate for the HUD badge, 0 until measured.
     """
 
     index: int

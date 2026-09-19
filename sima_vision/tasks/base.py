@@ -34,6 +34,7 @@ from ..neat import (
     make_run_options,
     resolve_flow_control,
 )
+from ..recorder import NeatVideoWriter
 from ..runloop import Stopper, TaskRuntime, run_pipeline, sink_depth_for
 from ..runtime import FAMILY_DECODE_TOKENS
 from ..sinks import Pipeline, load_labels, open_video_writer, start_insight
@@ -273,8 +274,13 @@ class Task:
             )
         if cfg.video_enable:
             pipeline.writer, pipeline.writer_path = open_video_writer(cfg, width, height, fps)
+            encoder = (
+                f"sima h264 {cfg.video_bitrate_kbps} kbps"
+                if isinstance(pipeline.writer, NeatVideoWriter)
+                else f"opencv {cfg.video_codec}"
+            )
             step.detail(
-                f"video: {pipeline.writer_path} codec={cfg.video_codec} "
+                f"video: {pipeline.writer_path} encoder={encoder} "
                 f"fps={cfg.video_fps or fps} hud={cfg.video_hud}"
             )
         if not (cfg.save_enable or cfg.video_enable or cfg.insight_enable):

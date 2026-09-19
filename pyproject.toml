@@ -50,11 +50,11 @@ dependencies = [
 # Not normally needed: a run installs these itself, into whichever virtualenv
 # holds pyneat, and only when the board turns out not to have them. Kept as an
 # extra so the same pinning is available by hand on a board where automatic
-# installs are turned off with SIMA_VISION_AUTO_INSTALL=0. numpy is capped
-# because pyneat 0.3.0 requires numpy<2 and 2.x breaks every simaai-* package.
+# installs are turned off with SIMA_VISION_AUTO_INSTALL=0. Uncapped since
+# Neat 0.4.0, whose pyneat runs on numpy 2.x and OpenCV 5.
 board = [
-    "numpy>=1.24,<2",
-    "opencv-python>=4.7,<5",
+    "numpy>=1.24",
+    "opencv-python>=4.7",
 ]
 # One command gets you a working checkout: the test suite exercises the mask
 # decoding, compositing and overlay for real, so it needs numpy and OpenCV

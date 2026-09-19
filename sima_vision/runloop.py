@@ -11,6 +11,7 @@ A task plugs into this by implementing :class:`TaskRuntime`.
 from __future__ import annotations
 
 import signal
+from collections import deque
 
 from .console import console
 from .runtime import time_ms
@@ -120,6 +121,62 @@ class ProfileWindow:
             f"{self.unit}={self.objects / self.frames:.1f}"
         )
         self.reset()
+
+
+class PipelineRate:
+    """The rate the Neat pipeline delivers frames at, for the HUD badge.
+
+    Measured per frame in the pull loop, over a sliding window, and only on
+    frames the recorder had no hand in. The recorder software-encodes 1080p
+    at roughly ten frames a second, and once its backlog fills, the loop
+    waits on it; timing the loop then measures the encoder, not the MLA. The
+    badge used to do exactly that, and to show the clip's own frame rate as a
+    placeholder for the first fifty frames.
+
+    So a frame counts only when the previous hand-off to the sinks did not
+    block, and not for a short while after one did or after the start: a pause
+    lets the graph fill its queues, and the pulls that drain them return at
+    once, which would read as a rate far above what the pipeline can do. While the
+    recorder is the bottleneck the window simply stops moving, and the badge
+    keeps the pipeline's last honest reading.
+
+    Attributes:
+        window: Frames to average over.
+        settle: Frames to ignore after the loop last waited on the sinks.
+    """
+
+    #: A hand-off shorter than this did not wait on the sinks.
+    BLOCKED_MS = 1.0
+
+    def __init__(self, window: int = 30, settle: int = 16) -> None:
+        self.window = window
+        self.settle = settle
+        self.spans: deque[float] = deque(maxlen=window)
+        self.last_ms = -1.0
+        # The graph fills its queues before the first pull, exactly as it does
+        # during a wait on the sinks, so the run starts out settling too.
+        self.cooldown = settle
+
+    def add(self, now_ms: float, blocked_ms: float) -> None:
+        """Record one frame pulled at ``now_ms`` after ``blocked_ms`` in submit.
+
+        ``blocked_ms`` is the hand-off *before* this pull, which is what could
+        have held the loop between the two.
+        """
+        if blocked_ms >= self.BLOCKED_MS:
+            self.cooldown = self.settle
+        elif self.cooldown:
+            self.cooldown -= 1
+        elif self.last_ms >= 0:
+            self.spans.append(now_ms - self.last_ms)
+        self.last_ms = now_ms
+
+    def fps(self) -> float:
+        """Frames per second over the window, or 0.0 before there is one."""
+        total = sum(self.spans)
+        if len(self.spans) < min(5, self.window) or total <= 0:
+            return 0.0
+        return len(self.spans) * 1000.0 / total
 
 
 class SourceTiming:
@@ -503,7 +560,8 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
     recovered = 0
     heartbeat_start = time_ms()
     heartbeat_count = 0
-    live_fps = float(pipeline.fps or 25)   # HUD value, refreshed each heartbeat
+    rate = PipelineRate()
+    blocked_ms = 0.0
 
     while not stopper.stop and (cfg.frames <= 0 or already + processed < cfg.frames):
         pull_start = time_ms()
@@ -520,6 +578,7 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
                 break
             continue
 
+        rate.add(pull_end, blocked_ms)
         stamp = FrameStamp.of(sample)
         timing.add(stamp)
         frame, results, stage_ms = task.decode(
@@ -530,9 +589,10 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
 
         processed += 1
         sinks.submit(
-            SinkJob(already + processed, stamp, frame, results, live_fps)
+            SinkJob(already + processed, stamp, frame, results, rate.fps())
         )
         sink_end = time_ms()
+        blocked_ms = sink_end - decode_end
 
         count = len(results)
         profile.add(
@@ -547,10 +607,9 @@ def consume_frames(pipeline: Pipeline, cfg, stopper: Stopper, sinks: SinkWorker,
         heartbeat_count += count
         if processed % HEARTBEAT_EVERY == 0:
             elapsed = time_ms() - heartbeat_start
-            rate = HEARTBEAT_EVERY * 1000.0 / elapsed if elapsed > 0 else 0.0
-            live_fps = rate or live_fps
+            loop_fps = HEARTBEAT_EVERY * 1000.0 / elapsed if elapsed > 0 else 0.0
             console.write(
-                f"  {already + processed:>6}  {rate:.1f} fps, "
+                f"  {already + processed:>6}  {loop_fps:.1f} fps, "
                 f"{heartbeat_count / HEARTBEAT_EVERY:.1f} {task.unit}/frame avg"
             )
             heartbeat_start = time_ms()

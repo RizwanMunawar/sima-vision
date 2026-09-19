@@ -4,7 +4,7 @@
 
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-FF8C00)](https://docs.sima.ai)
-[![Neat](https://img.shields.io/badge/Neat-0.3.0-800080)](https://docs.sima.ai)
+[![Neat](https://img.shields.io/badge/Neat-0.4.0-800080)](https://docs.sima.ai)
 
 [![CI](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
@@ -37,7 +37,7 @@ No Docker, no WSL, no login. Every command here is typed on the board.
 
 ```bash
 sima-cli login
-sima-cli neat install core@v0.3.0    # once per board
+sima-cli neat install core@v0.4.0    # once per board
 
 pip install sima-vision
 sima-vision detect
@@ -103,6 +103,8 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--timeout MS` | all | How long to wait for a frame before giving up. Default `20000` |
 | `--video-path PATH` | all | Where the annotated recording is written |
 | `--no-video` | all | Do not record |
+| `--video-encoder` | all | `sima` (hardware H.264, default) or `opencv` (software, about ten times slower) |
+| `--video-bitrate KBPS` | all | Target bitrate for the hardware encoder. Default `12000` |
 | `--save-dir DIR` | all | Where annotated stills are written |
 | `--save-every N` | all | Write every Nth still. Default `10`; `0` disables |
 | `--no-save` | all | Do not write stills |
@@ -114,11 +116,12 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--validate` | all | Resolve and check the settings, then stop. Needs no board |
 | `--quiet`, `-q` | all | Warnings, errors and the closing report only |
 | `--profile` | all | Per-stage timings, when a run is slower than it should be |
-| `--queue-depth N` | all | Neat's own queue depth. Every slot holds a decoded frame, so raising it makes a starved run worse. Default `1` |
+| `--queue-depth N` | all | Neat's own queue depth. Below `4` the graph drops frames when the recorder falls behind. Default `4` |
 | `--sink-queue-depth N` | all | Finished frames that may wait for the recorder. Host memory only. Default `12` |
 | `--sink-queue-mb MB` | all | Memory budget for that backlog, which grows it to fit a known clip |
 | `--output-buffers N` | all | Buffers each public output may hold. Default `1` |
 | `--decoder-buffers N` | all | Buffers to ask the decoder for. Default `0`, sized from the stream's reference frames |
+| `--decoder-tuning` | all | Hardware decoder preset. Default `default`, which keeps every frame; `auto` drops frames in bursts |
 | `--segment-frames N` | all | Frames per piece when a clip is too long for one decode. Default `150`; `0` runs it whole |
 | `--blur` / `--no-blur` | `segment` | Blur the background and keep instances sharp, or draw a plain overlay |
 | `--blur-method` | `segment` | `gaussian`, `pixelate` or `none`. Default `gaussian` |
@@ -248,6 +251,8 @@ parts of this repository are under **Apache-2.0**. See [LICENSE](LICENSE).
 
 - [SiMa.ai](https://github.com/SiMa-ai) for Modalix, the Palette SDK and Neat
 - [Ultralytics](https://github.com/ultralytics/ultralytics) for the YOLO26 models
+- [Timothy Do](https://github.com/dotimothy) for the Neat 0.4.0 port, frame-complete
+  recordings and hardware H.264 recording
 
 <div align="center">
 

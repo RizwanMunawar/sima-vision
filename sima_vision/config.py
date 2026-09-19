@@ -37,6 +37,12 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 #: Labels used when nothing else resolves.
 PACKAGED_LABELS = PACKAGE_ROOT / "data" / "coco_labels.txt"
 
+#: Where the recording is encoded: the hardware encoder, or OpenCV in software.
+VIDEO_ENCODERS = ("sima", "opencv")
+
+#: ``neatdecoder``'s ``decoder-tuning`` values.
+DECODER_TUNINGS = ("default", "auto", "low-memory", "throughput-low-latency")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Scalar readers
@@ -495,11 +501,15 @@ class BaseConfig:
         max_detections: Top-K cap per frame.
         frames: Frame limit. 0 runs until interrupted.
         pull_timeout_ms: How long to wait for a frame before giving up.
-        queue_depth: Depth of the Neat runtime's own queues. Every slot can
-            park a decoded frame, so this counts against the decoder's pool
-            along with ``output_buffers``: raise it and a stalling run stalls
-            sooner. It does not change the ``max-buffers`` and ``num-buffers``
-            in the printed pipeline, which pyneat fixes at 4.
+        queue_depth: Depth of the Neat runtime's own queues. At 1 the graph
+            drops frames between the decoder and the join whenever the pull
+            loop slows down -- 241 of 379 arrived with the recorder running,
+            ``block`` notwithstanding. 4 delivered all 379. It used to be kept
+            at 1 to spare the decoder's pool, back when the decoder's ``auto``
+            tuning discarded pictures rather than wait for a buffer; with
+            ``decoder_tuning: default`` it waits, so the slack is safe. It does
+            not change the ``max-buffers`` and ``num-buffers`` in the printed
+            pipeline, which pyneat fixes at 4.
         sink_queue_depth: How many finished frames may wait for the sink
             thread. These are numpy copies in host memory and hold no decoder
             buffer, so depth here is the cheap kind: it lets the pull loop keep
@@ -523,6 +533,11 @@ class BaseConfig:
             pins it. A negative number leaves pyneat's own -1 in place, which
             is what the app did before and which lets the daemon pick 8 for
             1080p regardless of what the stream needs.
+        decoder_tuning: ``neatdecoder``'s ``decoder-tuning`` preset:
+            ``default``, ``auto``, ``low-memory`` or
+            ``throughput-low-latency``. ``default`` delivers every picture;
+            ``auto``, the element's own default, drops a third or more of a
+            file's pictures in bursts, which is what makes a recording choppy.
         decoder_pool: Decoded frames the hardware decoder's pool holds. The
             boot log prints the real number as ``BufferNum=`` when the decoder
             finds the stream's resolution, and it is per-resolution, so 8 is
@@ -556,7 +571,12 @@ class BaseConfig:
         save_format: ``jpg`` or ``png``.
         video_enable: Whether to write an annotated video on the DevKit.
         video_path: Output video path.
-        video_codec: Four-character FourCC, with an MJPG fallback.
+        video_encoder: ``sima`` encodes on the DevKit's hardware H.264
+            encoder; ``opencv`` uses OpenCV's software writer and
+            ``video_codec``, at roughly a tenth of the speed.
+        video_bitrate_kbps: Target bitrate for the ``sima`` encoder.
+        video_codec: Four-character FourCC for the ``opencv`` encoder, with an
+            MJPG fallback.
         video_fps: Output frame rate. 0 matches the source.
         video_hud: Whether to draw the frame-rate badge.
         insight_enable: Whether to stream to Neat Insight.
@@ -597,11 +617,12 @@ class BaseConfig:
 
     frames: int = 0
     pull_timeout_ms: int = 20000
-    queue_depth: int = 1
+    queue_depth: int = 4
     sink_queue_depth: int = 12
     sink_queue_mb: int = 1024
     decoder_pool: int = 8
     decoder_buffers: int = 0
+    decoder_tuning: str = "default"
     segment_frames: int = 150
     output_buffers: int = 1
     run_preset: str = "auto"
@@ -617,6 +638,8 @@ class BaseConfig:
 
     video_enable: bool = True
     video_path: str = "output.mp4"
+    video_encoder: str = "sima"
+    video_bitrate_kbps: int = 12000
     video_codec: str = "mp4v"
     video_fps: int = 0
     video_hud: bool = True
@@ -729,11 +752,12 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         max_detections=_int(decode, "max_detections", 50),
         frames=_int(runtime, "frames", 0),
         pull_timeout_ms=_int(runtime, "pull_timeout_ms", 20000),
-        queue_depth=_int(runtime, "queue_depth", 1),
+        queue_depth=_int(runtime, "queue_depth", 4),
         sink_queue_depth=_int(runtime, "sink_queue_depth", 12),
         sink_queue_mb=_int(runtime, "sink_queue_mb", 1024),
         decoder_pool=_int(runtime, "decoder_pool", 8),
         decoder_buffers=_int(runtime, "decoder_buffers", 0),
+        decoder_tuning=_str(runtime, "decoder_tuning", "default").lower(),
         segment_frames=_int(runtime, "segment_frames", 150),
         output_buffers=_int(runtime, "output_buffers", 1),
         run_preset=_str(runtime, "preset", defaults.run_preset).lower(),
@@ -747,6 +771,8 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         save_format=_str(save, "format", "jpg").lower().lstrip("."),
         video_enable=_bool(video, "enable", True),
         video_path=_str(video, "path", defaults.video_path),
+        video_encoder=_str(video, "encoder", "sima").lower(),
+        video_bitrate_kbps=_int(video, "bitrate_kbps", 12000),
         video_codec=_str(video, "codec", "mp4v"),
         video_fps=_int(video, "fps", 0),
         video_hud=_bool(video, "hud", True),
@@ -817,6 +843,11 @@ def validate_base(cfg: BaseConfig) -> None:
         raise ValueError("runtime.sink_queue_mb must be >= 0")
     if cfg.decoder_pool < 1:
         raise ValueError("runtime.decoder_pool must be >= 1")
+    if cfg.decoder_tuning not in DECODER_TUNINGS:
+        raise ValueError(
+            f"runtime.decoder_tuning must be one of {', '.join(DECODER_TUNINGS)}, "
+            f"got {cfg.decoder_tuning!r}"
+        )
     if cfg.segment_frames < 0:
         raise ValueError("runtime.segment_frames must be >= 0")
     if cfg.pull_timeout_ms <= 0:
@@ -829,6 +860,13 @@ def validate_base(cfg: BaseConfig) -> None:
         raise ValueError("output.save.format must be jpg or png")
     if cfg.video_enable and not cfg.video_path:
         raise ValueError("output.video.path must be set when video output is enabled")
+    if cfg.video_encoder not in VIDEO_ENCODERS:
+        raise ValueError(
+            f"output.video.encoder must be one of {', '.join(VIDEO_ENCODERS)}, "
+            f"got {cfg.video_encoder!r}"
+        )
+    if cfg.video_bitrate_kbps <= 0:
+        raise ValueError("output.video.bitrate_kbps must be > 0")
     if len(cfg.video_codec) != 4:
         raise ValueError(
             f"output.video.codec must be a 4-character FourCC such as mp4v or MJPG, "

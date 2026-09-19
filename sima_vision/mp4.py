@@ -1,11 +1,11 @@
 """MP4 to Annex-B, so a container can be run on a board without ffmpeg.
 
-Neat 0.3.0 cannot build a container source. ``VideoTrackSelect`` emits
-``qtdemux name=<base> <base>.video_0``, and the graph then appends its instance
-suffix to element *names* only, so the pad reference goes stale and
-``gst_parse_launch`` fails with ``No src-element named "nN_demux"``. See
-:func:`sima_vision.media.make_elementary_h264_source`, which works around the
-same bug from the other side.
+A container goes through ``groups.video_input``, which builds its own
+decoder, and that decoder cannot be asked for ``decoder-tuning=default``. Left
+on ``auto`` it discards pictures: 57 of 78 frames of the short sample clip came
+through it on Neat 0.4.0. See
+:func:`sima_vision.media.default_tuned_decoder`. (Neat 0.3.0 could not build
+a container source at all, because of a demuxer naming bug.)
 
 The way past it is to stop handing Neat a container at all. An MP4 holds the
 very H.264 the raw path already runs; only the framing differs. In a container
@@ -401,3 +401,182 @@ def _write_annex_b(src: Path, dst: Path, fh, moov: bytes, size: int) -> int:
     if not written:
         raise RuntimeError(f"{src} yielded no frames; its sample table may be wrong")
     return written
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Writing
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def box(kind: bytes, *payload: bytes) -> bytes:
+    """One box: size, type, payload."""
+    body = b"".join(payload)
+    return struct.pack(">I", 8 + len(body)) + kind + body
+
+
+def full_box(kind: bytes, version: int, flags: int, *payload: bytes) -> bytes:
+    """A box whose payload opens with a version byte and 24 bits of flags."""
+    return box(kind, bytes([version]) + flags.to_bytes(3, "big"), *payload)
+
+
+def split_annex_b(data: bytes) -> list[bytes]:
+    """The NAL units of an Annex-B buffer, start codes removed."""
+    starts = []
+    pos = data.find(b"\x00\x00\x01")
+    while pos >= 0:
+        starts.append(pos + 3)
+        pos = data.find(b"\x00\x00\x01", pos + 3)
+    nals = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] - 3 if index + 1 < len(starts) else len(data)
+        # A four byte start code leaves its leading zero on the previous unit.
+        if index + 1 < len(starts) and end > start and data[end - 1] == 0:
+            end -= 1
+        if end > start:
+            nals.append(data[start:end])
+    return nals
+
+
+#: SPS, PPS and access unit delimiters live in ``avcC`` or nowhere, not in a
+#: sample.
+OUT_OF_BAND = frozenset({7, 8, 9})
+
+#: A unity transformation matrix, as ``mvhd`` and ``tkhd`` both want it.
+UNITY_MATRIX = struct.pack(">9I", 0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000)
+
+
+class Mp4Writer:
+    """Constant frame rate H.264 into an MP4, one access unit at a time.
+
+    The inverse of :func:`remux`, and deliberately as plain: one video track,
+    one chunk, every sample the same duration. The duration is the point. A
+    recording's frames are all one source interval apart however unevenly the
+    app produced them, and a muxer fed wall-clock timestamps would write that
+    unevenness into playback -- which is the choppiness this exists to avoid.
+
+    Samples stream into ``mdat`` as they arrive, so memory stays flat; the
+    sample table is written on :meth:`close`.
+
+    Attributes:
+        path: Where the file is being written.
+        frames: Samples written so far.
+    """
+
+    def __init__(self, path: str | Path, width: int, height: int, fps: int) -> None:
+        self.path = Path(path)
+        self.width = width
+        self.height = height
+        self.fps = max(1, int(fps))
+        self.frames = 0
+        self.sizes: list[int] = []
+        self.sync: list[int] = []
+        self.sps = b""
+        self.pps = b""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = self.path.open("wb")
+        self.fh.write(box(b"ftyp", b"isom", struct.pack(">I", 0x200), b"isomiso2avc1mp41"))
+        # A 64 bit mdat header, patched on close, so size never has to be known
+        # up front or fit in 32 bits.
+        self.mdat_at = self.fh.tell()
+        self.fh.write(struct.pack(">I", 1) + b"mdat" + struct.pack(">Q", 0))
+
+    def add(self, access_unit: bytes) -> None:
+        """Append one Annex-B access unit as the next frame."""
+        sample = bytearray()
+        idr = False
+        for nal in split_annex_b(access_unit):
+            kind = nal[0] & 0x1F
+            if kind == 7 and not self.sps:
+                self.sps = bytes(nal)
+            elif kind == 8 and not self.pps:
+                self.pps = bytes(nal)
+            if kind in OUT_OF_BAND:
+                continue
+            idr = idr or kind == 5
+            sample += struct.pack(">I", len(nal)) + nal
+        if not sample:
+            return
+        self.fh.write(sample)
+        self.sizes.append(len(sample))
+        self.frames += 1
+        if idr:
+            self.sync.append(self.frames)
+
+    def close(self) -> None:
+        """Write the sample table and finish the file."""
+        if self.fh.closed:
+            return
+        end = self.fh.tell()
+        self.fh.seek(self.mdat_at + 8)
+        self.fh.write(struct.pack(">Q", end - self.mdat_at))
+        self.fh.seek(end)
+        if self.frames and self.sps and self.pps:
+            self.fh.write(self._moov(self.mdat_at + 16))
+        self.fh.close()
+
+    def _avcc(self) -> bytes:
+        sps = self.sps
+        record = bytes([1, sps[1], sps[2], sps[3], 0xFF, 0xE1])
+        record += struct.pack(">H", len(sps)) + sps
+        record += b"\x01" + struct.pack(">H", len(self.pps)) + self.pps
+        if sps[1] in (100, 110, 122, 144):
+            # High profiles carry chroma format and bit depth: 4:2:0, 8 bit,
+            # which is all the hardware encoder produces.
+            record += bytes([0xFD, 0xF8, 0xF8, 0])
+        return box(b"avcC", record)
+
+    def _moov(self, data_offset: int) -> bytes:
+        timescale = self.fps * 1000
+        duration = self.frames * 1000
+        avc1 = box(
+            b"avc1",
+            bytes(6), struct.pack(">H", 1),                       # data_reference_index
+            bytes(16),
+            struct.pack(">HH", self.width, self.height),
+            struct.pack(">II", 0x480000, 0x480000), bytes(4),    # 72 dpi
+            struct.pack(">H", 1), bytes(32),                      # frame count, name
+            struct.pack(">Hh", 0x18, -1),
+            self._avcc(),
+        )
+        offsets = (
+            full_box(b"co64", 0, 0, struct.pack(">IQ", 1, data_offset))
+            if data_offset > 0xFFFFFFFF
+            else full_box(b"stco", 0, 0, struct.pack(">II", 1, data_offset))
+        )
+        stbl = box(
+            b"stbl",
+            full_box(b"stsd", 0, 0, struct.pack(">I", 1), avc1),
+            full_box(b"stts", 0, 0, struct.pack(">III", 1, self.frames, 1000)),
+            full_box(b"stss", 0, 0, struct.pack(f">I{len(self.sync)}I",
+                                                len(self.sync), *self.sync)),
+            full_box(b"stsc", 0, 0, struct.pack(">IIII", 1, 1, self.frames, 1)),
+            full_box(b"stsz", 0, 0, struct.pack(f">II{self.frames}I", 0, self.frames,
+                                                *self.sizes)),
+            offsets,
+        )
+        minf = box(
+            b"minf",
+            full_box(b"vmhd", 0, 1, bytes(8)),
+            box(b"dinf", full_box(b"dref", 0, 0, struct.pack(">I", 1),
+                                  full_box(b"url ", 0, 1))),
+            stbl,
+        )
+        mdia = box(
+            b"mdia",
+            full_box(b"mdhd", 0, 0, struct.pack(">IIIIHH", 0, 0, timescale, duration,
+                                                0x55C4, 0)),        # language "und"
+            full_box(b"hdlr", 0, 0, bytes(4), b"vide", bytes(12), b"VideoHandler\x00"),
+            minf,
+        )
+        tkhd = full_box(
+            b"tkhd", 0, 3,
+            struct.pack(">IIIII", 0, 0, 1, 0, duration), bytes(8),
+            struct.pack(">hhhH", 0, 0, 0, 0), UNITY_MATRIX,
+            struct.pack(">II", self.width << 16, self.height << 16),
+        )
+        mvhd = full_box(
+            b"mvhd", 0, 0,
+            struct.pack(">IIIIIH", 0, 0, timescale, duration, 0x10000, 0x100), bytes(10),
+            UNITY_MATRIX, bytes(24), struct.pack(">I", 2),
+        )
+        return box(b"moov", mvhd, box(b"trak", tkhd, mdia))
