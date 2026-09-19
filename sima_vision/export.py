@@ -698,13 +698,18 @@ def model_sdk_present() -> bool:
     return model_sdk_python() is not None
 
 
-def next_steps(onnx_path: Path, recipe_path: Path | None) -> str:
+def next_steps(onnx_path: Path, recipe_path: Path | None,
+               tried: list[str] | None = None) -> str:
     """What to do with the ONNX, when this machine cannot finish the job.
 
     The Model SDK quantizes to bfloat16, tessellates for the MLA and emits the
-    ELF. It lives in the Palette container on x86 and is not installable here,
-    so the honest thing is to hand over the ONNX, the exact recipe, and the two
-    commands -- rather than to fail at the last step with a stack trace.
+    ELF. It lives in the Palette container on x86, so the honest thing is to
+    hand over the ONNX, the exact recipe and the commands -- rather than to
+    fail at the last step with a stack trace.
+
+    Which interpreters were asked is part of that answer. "No Model SDK here",
+    printed inside a container that plainly has one, is really a question about
+    *which python is running*, and only the list settles it.
     """
     recipe = (
         f"  3. Compile, with the recipe written beside it:\n"
@@ -712,15 +717,22 @@ def next_steps(onnx_path: Path, recipe_path: Path | None) -> str:
         if recipe_path
         else "  3. Compile it with the Model SDK.\n"
     )
+    searched = ""
+    if tried:
+        searched = "\n  Asked each of these for `afe`, and none of them has it:\n"
+        searched += "".join(f"       {python}\n" for python in tried)
+        searched += (
+            "  If the one that can is not in that list, name it and run this again:\n"
+            f"       export {MODEL_SDK_PYTHON_ENV}=/path/to/that/python\n"
+        )
     return (
         "the ONNX is as far as this machine goes. The .tar.gz needs the SiMa "
         "Model SDK,\n"
         "  which quantizes to bfloat16, tessellates for the MLA and emits the "
         "ELF. That is\n"
         "  the `afe` package inside the Palette container, on x86 -- not on the "
-        "DevKit, and\n"
-        "  not installable beside this one. To see which you are on:\n"
-        '       python -c "import afe"\n'
+        "DevKit.\n"
+        f"{searched}"
         "\n"
         f"  1. Start Palette, and mount the directory holding {onnx_path.name}.\n"
         "  2. Inside it, install what the recipe imports:\n"

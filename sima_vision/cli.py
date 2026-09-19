@@ -50,9 +50,10 @@ from .export import (
     DEFAULT_OPSET,
     compile_recipe,
     export_onnx,
-    model_sdk_present,
+    model_sdk_python,
     next_steps,
     run_recipe,
+    sdk_candidates,
 )
 from .neat import describe_preprocess
 from .pack import complete_pack
@@ -476,11 +477,18 @@ def run_compile(args) -> int:
         # The two halves fail for different reasons and want different answers,
         # so they are asked separately. Collapsed into one branch, a machine
         # that was simply missing a recipe read as one that could never compile.
-        if not model_sdk_present():
+        # Which python, not whether this one. The recipe runs as a subprocess,
+        # so the SDK has to be importable to *it* -- and `pip install
+        # sima-vision` and `activate-model-compiler` land in different
+        # virtualenvs often enough that asking only about this interpreter
+        # stopped compiles on machines that could have finished them.
+        sdk_python = model_sdk_python()
+        if sdk_python is None:
             recipe_path = write_recipe(out_dir, step)
-            step.done("stopped at the ONNX: no `afe` module, so no Model SDK here")
-            console.warn(next_steps(onnx_path, recipe_path))
+            step.done("stopped at the ONNX: no python here can import `afe`")
+            console.warn(next_steps(onnx_path, recipe_path, sdk_candidates()))
             return 0
+        step.detail(f"Model SDK: {sdk_python}")
 
         recipe_path = write_recipe(out_dir, step, fetch_if_missing=True)
         if recipe_path is None:
@@ -498,6 +506,7 @@ def run_compile(args) -> int:
         pack = run_recipe(
             recipe_path, onnx_path, out_dir,
             on_line=narration.line, on_silence=narration.silence,
+            python=sdk_python,
         )
         step.detail(f"{narration.lines} lines of compiler output -> {log_path}")
         finish_pack(pack, step)

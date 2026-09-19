@@ -14,6 +14,7 @@ last step, and that the recipe it hands over is the one the pack shipped.
 from __future__ import annotations
 
 import io
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -574,6 +575,105 @@ def test_a_compile_that_wedges_is_stopped_and_said_so(tmp_path, monkeypatch):
             timeout=1,
         )
     assert (build / export.COMPILE_LOG).is_file()
+# -- which python compiles, not whether this one can --
+
+#: Records the interpreter that ran it, which is the thing under test.
+REPORTING_RECIPE = '''
+import argparse
+import pathlib
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model")
+parser.add_argument("--build-dir")
+args = parser.parse_args()
+
+build = pathlib.Path(args.build_dir)
+build.mkdir(parents=True, exist_ok=True)
+(build / "ran-under.txt").write_text(sys.executable, encoding="utf-8")
+(build / "out_mpk.tar.gz").write_bytes(b"pack")
+'''
+
+
+def test_the_recipe_runs_under_the_interpreter_it_is_given(tmp_path):
+    """The SDK has to be importable to the recipe, never to us.
+
+    `compile` runs the recipe as a subprocess, so a sima-vision installed in
+    one virtualenv can drive a Model SDK that lives in another -- which is the
+    normal shape of a Palette container, where `pip install sima-vision` and
+    `activate-model-compiler` do not have to have chosen the same one.
+    """
+    import sys
+
+    build = tmp_path / "build"
+    build.mkdir()
+    export.run_recipe(
+        make_recipe(tmp_path, REPORTING_RECIPE), tmp_path / "x.onnx", build,
+        python=sys.executable,
+    )
+    assert (build / "ran-under.txt").read_text(encoding="utf-8") == sys.executable
+    # And the log says which one, because "it compiled" and "it compiled with
+    # the python you meant" are different claims.
+    assert sys.executable in (build / export.COMPILE_LOG).read_text(encoding="utf-8")
+
+
+def test_the_activated_virtualenv_is_among_the_candidates(monkeypatch):
+    """`activate-model-compiler` exists to switch virtualenvs.
+
+    Not asking the one it switched to is how `no afe module here` got printed
+    at a prompt that reads `(model-compiler)`.
+    """
+    monkeypatch.setenv("VIRTUAL_ENV", "/opt/model-compiler")
+    monkeypatch.delenv(export.MODEL_SDK_PYTHON_ENV, raising=False)
+    candidates = export.sdk_candidates()
+    assert any("model-compiler" in python for python in candidates)
+
+
+def test_an_interpreter_can_be_named_outright(monkeypatch):
+    """The escape hatch has to win, or it is not one."""
+    monkeypatch.setenv(export.MODEL_SDK_PYTHON_ENV, "/opt/sdk/bin/python")
+    assert export.sdk_candidates()[0] == "/opt/sdk/bin/python"
+
+
+def test_the_same_interpreter_under_two_names_is_probed_once(monkeypatch):
+    """`python`, `python3` and the venv's own are usually one file.
+
+    Probing it three times is three imports of a heavy package to learn one
+    thing, on the slow path of an already slow command.
+    """
+    import sys
+
+    monkeypatch.delenv(export.MODEL_SDK_PYTHON_ENV, raising=False)
+    monkeypatch.setenv("VIRTUAL_ENV", str(Path(sys.executable).parent.parent))
+    monkeypatch.setattr(shutil, "which", lambda name: sys.executable)
+    assert export.sdk_candidates().count(sys.executable) == 1
+
+
+def test_the_first_interpreter_with_the_sdk_is_the_one_used(monkeypatch):
+    monkeypatch.setattr(
+        export, "sdk_candidates", lambda: ["/no/sdk/python", "/has/sdk/python"],
+    )
+    monkeypatch.setattr(
+        export, "has_model_sdk", lambda python: python == "/has/sdk/python",
+    )
+    assert export.model_sdk_python() == "/has/sdk/python"
+    assert export.model_sdk_present() is True
+
+
+def test_giving_up_says_which_interpreters_were_asked(monkeypatch):
+    """"No Model SDK here" inside a container that has one is unanswerable.
+
+    Without the list there is nothing for the reader to check: the message
+    describes a machine they can see is wrong, and names nothing they can act
+    on. With it, the mismatch is the first thing they read.
+    """
+    text = export.next_steps(
+        Path("build/best-raw.onnx"), None,
+        ["/usr/bin/python3", "/opt/model-compiler/bin/python"],
+    )
+    assert "/usr/bin/python3" in text
+    assert "/opt/model-compiler/bin/python" in text
+    assert export.MODEL_SDK_PYTHON_ENV in text, "say how to override the guess"
 
 
 def test_the_guidance_names_the_module_it_looked_for():
