@@ -134,9 +134,9 @@ class PipelineRate:
     placeholder for the first fifty frames.
 
     So a frame counts only when the previous hand-off to the sinks did not
-    block, and not for a short while after one did: the pause lets the graph
-    fill its queues, and the pulls that drain them return at once, which
-    would read as a rate far above what the pipeline can do. While the
+    block, and not for a short while after one did or after the start: a pause
+    lets the graph fill its queues, and the pulls that drain them return at
+    once, which would read as a rate far above what the pipeline can do. While the
     recorder is the bottleneck the window simply stops moving, and the badge
     keeps the pipeline's last honest reading.
 
@@ -148,12 +148,14 @@ class PipelineRate:
     #: A hand-off shorter than this did not wait on the sinks.
     BLOCKED_MS = 1.0
 
-    def __init__(self, window: int = 30, settle: int = 12) -> None:
+    def __init__(self, window: int = 30, settle: int = 16) -> None:
         self.window = window
         self.settle = settle
         self.spans: deque[float] = deque(maxlen=window)
         self.last_ms = -1.0
-        self.cooldown = 0
+        # The graph fills its queues before the first pull, exactly as it does
+        # during a wait on the sinks, so the run starts out settling too.
+        self.cooldown = settle
 
     def add(self, now_ms: float, blocked_ms: float) -> None:
         """Record one frame pulled at ``now_ms`` after ``blocked_ms`` in submit.

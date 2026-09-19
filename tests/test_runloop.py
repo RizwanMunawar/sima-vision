@@ -682,11 +682,25 @@ def test_the_badge_rate_is_measured_not_guessed():
     """Nothing to show until frames have been timed; no stand-in value."""
     from sima_vision.runloop import PipelineRate
 
-    rate = PipelineRate()
+    rate = PipelineRate(settle=0)
     assert rate.fps() == 0.0
     for i in range(3):
         rate.add(i * 15.0, 0.0)
     assert rate.fps() == 0.0, "two spans are not a measurement"
+
+
+def test_the_badge_rate_skips_the_queues_filled_before_the_first_pull():
+    from sima_vision.runloop import PipelineRate
+
+    rate = PipelineRate(window=10, settle=4)
+    now = 0.0
+    for _ in range(4):                   # pre-filled queues drain at once
+        now += 1.0
+        rate.add(now, 0.0)
+    for _ in range(10):
+        now += 20.0
+        rate.add(now, 0.0)
+    assert rate.fps() == pytest.approx(50.0)
 
 
 def test_the_badge_rate_ignores_frames_the_recorder_held_up():
@@ -699,7 +713,7 @@ def test_the_badge_rate_ignores_frames_the_recorder_held_up():
 
     rate = PipelineRate(window=10, settle=3)
     now = 0.0
-    for _ in range(12):                  # the pipeline, unhindered: 50 fps
+    for _ in range(15):                  # the pipeline, unhindered: 50 fps
         now += 20.0
         rate.add(now, 0.0)
     assert rate.fps() == pytest.approx(50.0)
