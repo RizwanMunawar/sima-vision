@@ -251,6 +251,8 @@ parts of this repository are under **Apache-2.0**. See [LICENSE](LICENSE).
 
 - [SiMa.ai](https://github.com/SiMa-ai) for Modalix, the Palette SDK and Neat
 - [Ultralytics](https://github.com/ultralytics/ultralytics) for the YOLO26 models
+- [Timothy Do](https://github.com/dotimothy) for the Neat 0.4.0 port, frame-complete
+  recordings and hardware H.264 recording
 
 <div align="center">
 
