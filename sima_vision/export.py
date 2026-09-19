@@ -618,13 +618,86 @@ MODEL_SDK_PYTHON_ENV = "SIMA_VISION_MODEL_SDK_PYTHON"
 #: The Model SDK's top-level module. Importable only inside the container.
 SDK_MODULE = "afe"
 
-#: Asked of a candidate interpreter. `find_spec` rather than a plain import:
-#: the SDK is heavy, this runs up to four times, and whether it is *there* is
-#: the whole question.
-SDK_PROBE = (
-    "import importlib.util, sys; "
-    f"sys.exit(0 if importlib.util.find_spec({SDK_MODULE!r}) else 1)"
-)
+#: What SiMa's archived compile script imports, read off the script itself.
+#: `numpy`, `onnx` and `onnxsim` are ordinary wheels. `afe` and `sima_utils`
+#: are the Model SDK and cannot be installed beside it -- a machine without
+#: them is the wrong machine, not an under-equipped one.
+RECIPE_REQUIREMENTS = ("numpy", "onnx", "onnxsim", "afe", "sima_utils")
+
+#: The subset a message can name a fix for.
+INSTALLABLE_REQUIREMENTS = ("numpy", "onnx", "onnxsim")
+
+
+def missing_in(python: str, modules) -> list[str]:
+    """Which of *modules* the interpreter *python* cannot import.
+
+    Asked of that interpreter rather than this one, because that is the one
+    that will run the recipe. `find_spec` rather than an import: afe is heavy,
+    and whether it is *there* is the whole question.
+    """
+    import subprocess
+
+    modules = list(modules)
+    code = (
+        "import importlib.util as u\n"
+        f"mods = {modules!r}\n"
+        "out = []\n"
+        "for m in mods:\n"
+        "    try:\n"
+        "        ok = u.find_spec(m) is not None\n"
+        "    except Exception:\n"
+        "        ok = False\n"
+        "    if not ok:\n"
+        "        out.append(m)\n"
+        "print(' '.join(out))\n"
+    )
+    try:
+        result = subprocess.run(  # noqa: S603
+            [python, "-c", code],
+            capture_output=True, text=True, timeout=180, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return modules
+    if result.returncode != 0:
+        return modules
+    return result.stdout.split()
+
+
+def missing_recipe_requirements(python: str) -> list[str]:
+    """What the compile still needs, in the interpreter that will run it."""
+    return missing_in(python, RECIPE_REQUIREMENTS)
+
+
+def requirements_help(missing: list[str], python: str) -> str:
+    """What to install, and where, when the recipe's imports are not all there.
+
+    Named against *python* rather than "here": the whole reason this is checked
+    in another interpreter is that it is not the one you are typing into, and a
+    `pip install` run in the wrong virtualenv looks like it worked.
+    """
+    installable = [name for name in missing if name in INSTALLABLE_REQUIREMENTS]
+    sdk = [name for name in missing if name not in INSTALLABLE_REQUIREMENTS]
+
+    text = (
+        "the compile needs a few things this interpreter does not have:\n"
+        f"       {python}\n"
+        f"  missing: {', '.join(missing)}\n"
+    )
+    if installable:
+        text += (
+            "\n  Install them into that one, which is not necessarily the one on "
+            "your PATH:\n"
+            f"       {python} -m pip install {' '.join(installable)}\n"
+        )
+    if sdk:
+        text += (
+            f"\n  {', '.join(sdk)} {'is' if len(sdk) == 1 else 'are'} the Model SDK "
+            "itself and cannot be pip installed. If that\n"
+            "  interpreter is not the SDK's, name the one that is and run this "
+            "again:\n"
+            f"       export {MODEL_SDK_PYTHON_ENV}=/path/to/that/python\n"
+        )
+    return text.rstrip()
 
 
 def sdk_candidates() -> list[str]:
@@ -673,16 +746,7 @@ def sdk_candidates() -> list[str]:
 
 def has_model_sdk(python: str) -> bool:
     """Whether *python* can import the Model SDK."""
-    import subprocess
-
-    try:
-        result = subprocess.run(  # noqa: S603
-            [python, "-c", SDK_PROBE],
-            capture_output=True, timeout=120, check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0
+    return not missing_in(python, [SDK_MODULE])
 
 
 def model_sdk_python() -> str | None:

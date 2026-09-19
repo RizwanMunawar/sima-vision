@@ -50,8 +50,10 @@ from .export import (
     DEFAULT_OPSET,
     compile_recipe,
     export_onnx,
+    missing_recipe_requirements,
     model_sdk_python,
     next_steps,
+    requirements_help,
     run_recipe,
     sdk_candidates,
 )
@@ -490,7 +492,16 @@ def run_compile(args) -> int:
             return 0
         step.detail(f"Model SDK: {sdk_python}")
 
-        recipe_path = write_recipe(out_dir, step, fetch_if_missing=True)
+        # Before the pack download, not after: 21 MB spent to discover that
+        # the interpreter cannot run what is inside it is 21 MB wasted, and
+        # the answer is known without spending any of it.
+        absent = missing_recipe_requirements(sdk_python)
+        if absent:
+            step.done("stopped at the ONNX: the compile's own imports are not all here")
+            console.warn(requirements_help(absent, sdk_python))
+            return 0
+
+        recipe_path = write_recipe(out_dir, step)
         if recipe_path is None:
             step.done("stopped at the ONNX: no pack to take a compile recipe from")
             console.warn(next_steps(onnx_path, None))
@@ -545,23 +556,28 @@ def finish_pack(pack: Path, step) -> None:
         step.detail(f"added {', '.join(added)} from {reference.name}")
 
 
-def write_recipe(out_dir: Path, step, fetch_if_missing: bool = False) -> Path | None:
+def write_recipe(out_dir: Path, step) -> Path | None:
     """Copy a published pack's own compile script next to the ONNX.
 
     Taken from a pack rather than written here, because the settings that
     matter -- bfloat16, MSE calibration, the MLA tessellation layouts -- are
     the ones SiMa actually shipped, and a paraphrase of them would drift.
 
+    A pack is downloaded when there is none to read. It used to be fetched only
+    by the caller that was about to compile, on the reasoning that 21 MB is not
+    worth spending on a machine that was going to stop at the ONNX anyway. What
+    that actually bought was the worst guidance of the three: a machine with no
+    Model SDK printed "compile it with the Model SDK" instead of the exact
+    command, because the recipe it would have named was the thing it had
+    skipped. The pack is public -- a plain GET off the GitHub release, no login
+    -- and it is cached, so it is a one-time cost either way.
+
     Args:
         out_dir: Where the recipe is written, beside the ONNX.
         step: The console step to report under.
-        fetch_if_missing: Download a pack when there is none to read. Only the
-            caller that is about to compile asks for this: it is a 21 MB
-            download for a file inside it, which is worth it to finish the job
-            and not worth it on a machine that was going to stop anyway.
     """
     pack = reference_pack()
-    if pack is None and fetch_if_missing:
+    if pack is None:
         # Every pack carries the same recipe, so the smallest one will do.
         step.detail("no pack here to take a recipe from, fetching the nano one")
         try:
@@ -570,15 +586,14 @@ def write_recipe(out_dir: Path, step, fetch_if_missing: bool = False) -> Path | 
             step.note(str(exc))
         pack = reference_pack()
     if pack is None:
-        # The common way to land here is a fresh Palette container: the Model
-        # SDK is importable, so the compile is one file away from finishing, and
-        # the file it needs lives inside a published pack that only `sima-cli`
-        # can fetch -- which the container's own venv does not have.
+        # Not a login problem, whatever the download said: the default packs
+        # are on the public release. Something stopped the GET, and the only
+        # other way to a recipe is a pack that is already on a machine.
         step.note(
             f"no model pack in {models_dir()} to copy a recipe from, and the recipe\n"
-            "comes inside one. Either of these gets you one:\n"
-            "  pip install sima-cli && sima-cli login   # then run this again\n"
-            "  sima-vision push <any pack>              # from a machine that has one"
+            "comes inside one. The download above is the usual way to get one; if it\n"
+            "cannot reach the release from here, bring a pack over instead:\n"
+            "  sima-vision push <any pack>       # from a machine that has one"
         )
         return None
     try:

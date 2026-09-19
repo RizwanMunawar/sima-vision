@@ -575,6 +575,57 @@ def test_a_compile_that_wedges_is_stopped_and_said_so(tmp_path, monkeypatch):
             timeout=1,
         )
     assert (build / export.COMPILE_LOG).is_file()
+# -- what the recipe imports, asked of the interpreter that will run it --
+
+def test_what_an_interpreter_is_missing_is_asked_of_that_interpreter(tmp_path):
+    """Not of this one. That is the entire point.
+
+    `pip install` in the shell you are typing into and an SDK in another
+    virtualenv is the normal shape of the container, and a check run here
+    would report the wrong machine's answer with total confidence.
+    """
+    import sys
+
+    absent = export.missing_in(sys.executable, ["sys", "json", "no_such_module_xyz"])
+    assert absent == ["no_such_module_xyz"]
+
+
+def test_an_interpreter_that_cannot_be_run_counts_as_missing_everything(tmp_path):
+    """A path that is not a python is not a python with the SDK in it."""
+    assert export.missing_in(str(tmp_path / "not-a-python"), ["afe"]) == ["afe"]
+    assert export.has_model_sdk(str(tmp_path / "not-a-python")) is False
+
+
+def test_the_recipes_own_imports_are_what_is_checked():
+    """Read off SiMa's archived script, not guessed.
+
+    It opens with numpy, onnx and onnxsim, then afe and sima_utils. Checking
+    only afe is how a compile got as far as running the recipe and died on
+    `ModuleNotFoundError: No module named 'onnxsim'` minutes later.
+    """
+    assert set(export.RECIPE_REQUIREMENTS) == {
+        "numpy", "onnx", "onnxsim", "afe", "sima_utils",
+    }
+    # The SDK is not on PyPI, so a message must not offer to install it.
+    assert "afe" not in export.INSTALLABLE_REQUIREMENTS
+    assert "sima_utils" not in export.INSTALLABLE_REQUIREMENTS
+
+
+def test_the_fix_is_aimed_at_the_interpreter_that_needs_it():
+    """`pip install onnxsim` in the wrong virtualenv looks like it worked."""
+    text = export.requirements_help(["onnxsim"], "/opt/sdk/bin/python")
+    assert "/opt/sdk/bin/python -m pip install onnxsim" in text
+    assert "not necessarily the one on your PATH" in text
+
+
+def test_a_missing_sdk_is_not_offered_as_a_pip_install():
+    """Telling someone to `pip install afe` sends them somewhere that fails."""
+    text = export.requirements_help(["onnxsim", "afe", "sima_utils"], "/opt/py")
+    assert "pip install onnxsim" in text
+    assert "pip install afe" not in text
+    assert export.MODEL_SDK_PYTHON_ENV in text, "say how to point at the right one"
+
+
 # -- which python compiles, not whether this one can --
 
 #: Records the interpreter that ran it, which is the thing under test.

@@ -61,9 +61,11 @@ board = [
 # trains the model, and the board -- where this package is normally installed --
 # has no use for any of them. onnx is listed because torch does not depend on
 # it: `torch.onnx.export` imports it at the end of the trace and fails there if
-# it is absent. onnxsim is what SiMa's own archived compile script imports.
+# it is absent. numpy and onnxsim are what SiMa's own archived compile script
+# imports, alongside the SDK itself.
 compile = [
     "ultralytics>=8.3",
+    "numpy>=1.24",
     "onnx>=1.15",
     "onnxsim>=0.4",
 ]
