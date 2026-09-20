@@ -418,8 +418,17 @@ def test_a_missing_onnx_is_caught_before_the_trace(tmp_path, monkeypatch):
 
     real = importlib.util.find_spec
 
+    # torch and ultralytics are answered rather than looked up. The scenario is
+    # a container that has both and not onnx, and CI has none of the three --
+    # looked up, this would assert about the runner instead of the preflight.
+    present = object()
+
     def without_onnx(name, *args, **kwargs):
-        return None if name == "onnx" else real(name, *args, **kwargs)
+        if name == "onnx":
+            return None
+        if name in ("torch", "ultralytics"):
+            return present
+        return real(name, *args, **kwargs)
 
     monkeypatch.setattr(importlib.util, "find_spec", without_onnx)
     assert export.missing_requirements() == ["onnx"]
