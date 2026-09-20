@@ -702,7 +702,7 @@ def test_zero_still_means_follow_the_caption():
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: The palette as it was specified, in the order it was given.
-PALETTE_HEX = ["042AFF", "05299E", "46237A", "080708"]
+PALETTE_HEX = ["F28C28", "05299E", "46237A", "080708"]
 
 
 def bgr_of(hex_rgb: str) -> tuple[int, int, int]:
@@ -725,29 +725,64 @@ def test_the_class_palette_is_the_one_that_was_specified():
 def test_class_colours_cycle_and_are_stable():
     from sima_vision.draw import CLASS_COLORS, class_color
 
-    assert class_color(0) == bgr_of("042AFF")
+    assert class_color(0) == bgr_of("F28C28")
     assert class_color(1) == bgr_of("05299E")
     assert class_color(len(CLASS_COLORS)) == class_color(0)
     assert class_color(79) == CLASS_COLORS[79 % len(CLASS_COLORS)]
 
 
-def test_white_captions_stay_legible_on_every_class_colour():
-    """The palette is dark by design, so the band carries the reading.
+def test_every_class_colour_gets_a_readable_caption():
+    """The palette is mixed, so the ink is picked per band rather than fixed.
 
-    Which only works while the text clears it. Checked as a contrast ratio
-    rather than by eye, because a colour added later will not be.
+    Checked as a contrast ratio rather than by eye, because a colour added
+    later will not be looked at as carefully as these four were.
     """
-    from sima_vision.draw import CLASS_COLORS
+    from sima_vision.draw import (
+        CLASS_COLORS,
+        MIN_CONTRAST,
+        contrast_ratio,
+        readable_text_color,
+    )
 
-    def luminance(bgr):
-        b, g, r = (c / 255 for c in bgr)
-        return 0.2126 * r ** 2.2 + 0.7152 * g ** 2.2 + 0.0722 * b ** 2.2
-
-    text = DrawConfig().text_color
-    assert text == (255, 255, 255)
+    preferred = DrawConfig().text_color
+    assert preferred == (255, 255, 255)
     for color in CLASS_COLORS:
-        ratio = 1.05 / (luminance(color) + 0.05)
-        assert ratio > 7.0, f"white on {color} is only {ratio:.1f}:1"
+        ink = readable_text_color(color, preferred)
+        ratio = contrast_ratio(color, ink)
+        assert ratio >= MIN_CONTRAST, f"{ink} on {color} is only {ratio:.1f}:1"
+
+
+def test_the_ink_only_moves_where_white_would_fail():
+    """The override is a repair, not a restyle.
+
+    Every band that already carried white keeps it; a caption turning black
+    over a colour that was never a problem is a worse surprise than the one
+    this fixes.
+    """
+    from sima_vision.draw import BLACK, WHITE, class_color, readable_text_color
+
+    # #F28C28: white is 2.5:1 there, black is 8.6:1.
+    assert readable_text_color(class_color(0), WHITE) == BLACK
+    for class_id in (1, 2, 3):
+        assert readable_text_color(class_color(class_id), WHITE) == WHITE
+
+
+def test_a_configured_text_colour_is_honoured_while_it_is_readable():
+    """`text_color` is a setting, not a suggestion -- until it is unreadable."""
+    from sima_vision.draw import BLACK, readable_text_color
+
+    amber = (0, 194, 255)
+    # Dark bands take the configured amber, which clears the bar on them.
+    assert readable_text_color((8, 7, 8), amber) == amber
+    # The orange does not, so it is overridden rather than left illegible.
+    assert readable_text_color((40, 140, 242), amber) == BLACK
+
+
+def test_the_threshold_is_the_large_text_one():
+    """4.5 is for body text. These captions are 1.6 scale with 4px strokes."""
+    from sima_vision.draw import MIN_CONTRAST
+
+    assert MIN_CONTRAST == 3.0
 
 
 def test_boxes_and_masks_share_one_palette():

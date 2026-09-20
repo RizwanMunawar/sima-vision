@@ -13,17 +13,26 @@ from . import runtime
 # beside each entry because that is how it was chosen and how it will be
 # checked against a design again.
 #
-# Three of these are dark enough that the caption band carries the reading and
-# the box outline is a marker rather than the thing you read; the first is a
-# full-strength blue that holds its own outline. Captions are white on the same
-# colour, which clears 7:1 on all four -- the bright one being the tight case,
-# at 7.7:1.
+# Mixed lightness on purpose, which is why the caption ink is chosen per band
+# rather than fixed: white on the orange is 2.5:1 and unreadable, black on it
+# is 8.6:1, and the opposite holds for the other three. See
+# `readable_text_color`.
 CLASS_COLORS = [
-    (255, 42, 4),     # #042AFF
+    (40, 140, 242),   # #F28C28
     (158, 41, 5),     # #05299E
     (122, 35, 70),    # #46237A
     (8, 7, 8),        # #080708
 ]
+
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+
+#: Contrast a caption must clear against its own band, below which the ink is
+#: overridden. WCAG's large-text threshold, which is the right one here: the
+#: captions are 1.6 scale with 4px strokes at 1080p, far past the 18pt that
+#: qualifies. Using the 4.5 meant for body text would flip perfectly legible
+#: white captions to black over a band that was never a problem.
+MIN_CONTRAST = 3.0
 
 # All digits share one vertical extent in this font, so folding them to a single
 # digit keeps the cache to one entry per distinct caption rather than one per
@@ -43,6 +52,52 @@ def class_color(class_id: int) -> tuple[int, int, int]:
         A BGR tuple, repeating every :data:`CLASS_COLORS` entries.
     """
     return CLASS_COLORS[class_id % len(CLASS_COLORS)]
+
+
+def relative_luminance(bgr: tuple[int, int, int]) -> float:
+    """WCAG relative luminance of a BGR colour.
+
+    The real curve rather than a gamma approximation, because the decision it
+    feeds is binary and the two answers are furthest apart exactly in the
+    mid-tones where an approximation drifts most.
+    """
+    b, g, r = bgr
+
+    def channel(value: int) -> float:
+        c = value / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def contrast_ratio(one: tuple[int, int, int], two: tuple[int, int, int]) -> float:
+    """WCAG contrast between two BGR colours, from 1.0 to 21.0."""
+    a, b = relative_luminance(one), relative_luminance(two)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+def readable_text_color(band: tuple[int, int, int],
+                        preferred: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Ink for a caption sitting on ``band``.
+
+    ``preferred`` is honoured whenever it clears :data:`MIN_CONTRAST`, so the
+    configured ``text_color`` is what gets drawn in every ordinary case. It is
+    overridden only when it would be unreadable, and then by whichever of black
+    or white is further from the band.
+
+    This exists because the palette is no longer uniformly dark. White on
+    #F28C28 is 2.5:1 -- text you can see is there and cannot read -- while
+    black on it is 8.6:1; on #080708 that reverses, 20:1 against 1.04:1. One
+    fixed ink cannot serve both, and the band colour is the only thing that
+    knows which case it is.
+
+    In practice this fires on the orange and nothing else: every other band in
+    use, including the fall alert's red at 3.9:1, keeps the white it already
+    had.
+    """
+    if contrast_ratio(band, preferred) >= MIN_CONTRAST:
+        return preferred
+    return BLACK if relative_luminance(band) > 0.18 else WHITE
 
 
 def text_ink_extent(text: str, text_scale: float, text_thickness: int) -> tuple[int, int]:
@@ -158,7 +213,7 @@ def draw_caption(frame, text: str, anchor: tuple[int, int], color, draw, scale: 
     cv2.rectangle(frame, (left, top), (left + band_w, top + band_h), color, -1)
     cv2.putText(
         frame, text, (left + pad, top + pad + above), runtime.FONT, text_scale,
-        draw.text_color, text_thickness, cv2.LINE_AA,
+        readable_text_color(color, draw.text_color), text_thickness, cv2.LINE_AA,
     )
 
 
