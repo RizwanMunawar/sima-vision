@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pytest
 
-from sima_vision import __version__
+from sima_vision import __version__, cli
 from sima_vision.cli import build_parser, collect_overrides, main
 from sima_vision.console import console
 from sima_vision.tasks import TASKS
@@ -235,3 +236,59 @@ def test_an_ordinary_error_still_gets_its_heading(capsys):
     console.error("no such file: best.pt")
     err = capsys.readouterr().err
     assert "ERROR" in err and "no such file: best.pt" in err
+
+
+# -- the frame-rate badge --
+
+def test_the_badge_can_be_restyled_without_a_config_file():
+    """Every knob was reachable only through `visualization.hud` in YAML.
+
+    It had been configurable since the first version, which is not the same as
+    being findable: the flag table listed `--no-hud` and nothing else, so the
+    question people actually asked was whether it could be changed at all.
+    """
+    args = parse(["segment", "--hud-scale", "2.5", "--hud-thickness", "4",
+                  "--hud-bg", "0,0,255", "--hud-color", "0,255,255",
+                  "--hud-padding", "30"])
+    assert collect_overrides(args) == {
+        "visualization.hud.text_scale": 2.5,
+        "visualization.hud.text_thickness": 4,
+        "visualization.hud.bg_color": [0, 0, 255],
+        "visualization.hud.text_color": [0, 255, 255],
+        "visualization.hud.padding": 30,
+    }
+
+
+def test_the_badge_flags_are_on_every_app():
+    """One overlay, one set of flags. detect and fall draw the same badge."""
+    for name in TASKS:
+        args = parse([name, "--hud-bg", "10,20,30"])
+        assert collect_overrides(args)["visualization.hud.bg_color"] == [10, 20, 30]
+
+
+def test_a_colour_is_three_channels_of_0_to_255():
+    assert cli.bgr_colour("0,255,255") == [0, 255, 255]
+    assert cli.bgr_colour(" 1 , 2 , 3 ") == [1, 2, 3]
+
+
+@pytest.mark.parametrize("value", ["255,0", "1,2,3,4", "300,0,0", "red", "1,2,x", ""])
+def test_a_colour_that_is_not_one_is_refused_with_the_reason(value):
+    """A flag that reads correctly and paints the wrong colour is worse than
+    one that refuses. `red` is not accepted precisely because it would have to
+    mean 0,0,255 here, and nobody expects that of the word."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli.bgr_colour(value)
+
+
+def test_the_channel_order_matches_the_config_file():
+    """BGR, because the config file and OpenCV are both BGR.
+
+    Taking RGB on the flag and BGR in the YAML would make the same three
+    numbers mean two different colours depending on where they were written.
+    """
+    import inspect
+
+    doc = inspect.getdoc(cli.bgr_colour) or ""
+    assert "BGR" in doc
+    # Red is 0,0,255 in this order. If that ever flips, this is the canary.
+    assert cli.bgr_colour("0,0,255") == [0, 0, 255]

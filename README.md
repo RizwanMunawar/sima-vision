@@ -109,6 +109,11 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--save-every N` | all | Write every Nth still. Default `10`; `0` disables |
 | `--no-save` | all | Do not write stills |
 | `--no-hud` | all | Leave the frame-rate badge off the overlay |
+| `--hud-scale N` | all | Frame-rate badge font size. Default `1.3`; `0` follows the caption scale |
+| `--hud-thickness N` | all | Badge stroke weight. `0` follows the caption thickness |
+| `--hud-bg B,G,R` | all | Badge fill colour. Default `128,0,128` |
+| `--hud-color B,G,R` | all | Badge text colour. Default `255,255,255` |
+| `--hud-padding PX` | all | Gap between badge text and its edge, which is what sizes the badge |
 | `--insight` | all | Stream to Neat Insight over UDP. Off by default |
 | `--insight-host HOST` | all | Insight address as the board sees it. Default `127.0.0.1` |
 | `--config`, `-c PATH` | all | Config file. Defaults to `./config.yaml` |

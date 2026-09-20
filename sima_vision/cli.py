@@ -235,6 +235,34 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         "--no-hud", dest="output.video.hud", action="store_const", const=False,
         help="Leave the frame-rate badge off the overlay.",
     )
+    # The badge's look was configurable from the first version and reachable
+    # only through a config file, which meant nobody found it. These four are
+    # the ones people actually want; the other eight stay in
+    # `visualization.hud`.
+    out.add_argument(
+        "--hud-scale", dest="visualization.hud.text_scale", type=float,
+        metavar="N",
+        help="Frame-rate badge font size. Default 1.3; 0 follows the caption scale.",
+    )
+    out.add_argument(
+        "--hud-thickness", dest="visualization.hud.text_thickness", type=int,
+        metavar="N",
+        help="Badge stroke weight. 0 follows the caption thickness.",
+    )
+    out.add_argument(
+        "--hud-bg", dest="visualization.hud.bg_color", type=bgr_colour,
+        metavar="B,G,R",
+        help="Badge fill colour, as B,G,R. Default 128,0,128.",
+    )
+    out.add_argument(
+        "--hud-color", dest="visualization.hud.text_color", type=bgr_colour,
+        metavar="B,G,R",
+        help="Badge text colour, as B,G,R. Default 255,255,255.",
+    )
+    out.add_argument(
+        "--hud-padding", dest="visualization.hud.padding", type=int, metavar="PX",
+        help="Gap between badge text and its edge, which is what sizes the badge.",
+    )
     out.add_argument(
         "--insight", dest="output.insight.enable", action="store_const", const=True,
         help="Stream to Neat Insight over UDP. Off by default: its encoder shares "
@@ -244,6 +272,30 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         "--insight-host", dest="output.insight.host", metavar="HOST",
         help="Insight address as the DevKit sees it. Default 127.0.0.1.",
     )
+
+
+def bgr_colour(value: str) -> list[int]:
+    """Parse ``B,G,R`` for a colour flag.
+
+    BGR rather than RGB because the whole overlay is OpenCV's, and one
+    convention throughout beats a flag that reverses what the config file next
+    to it means. Named colours are deliberately not accepted: `red` would have
+    to be `0,0,255` here, and a flag that reads correctly and paints the wrong
+    colour is worse than one that only takes numbers.
+    """
+    parts = [part.strip() for part in str(value).split(",")]
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError(
+            f"expected three numbers as B,G,R -- got {value!r}"
+        )
+    channels = []
+    for part in parts:
+        if not part.isdigit() or not 0 <= int(part) <= 255:
+            raise argparse.ArgumentTypeError(
+                f"{part!r} is not a channel value: each of B, G and R is 0-255"
+            )
+        channels.append(int(part))
+    return channels
 
 
 def add_config_arguments(parser: argparse.ArgumentParser) -> None:

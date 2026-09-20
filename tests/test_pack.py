@@ -265,3 +265,110 @@ def test_only_the_missing_files_are_added(tmp_path, reference):
 
     assert added == [packing.PIPELINE, packing.MLA_CONFIG]
     assert contents(pack)[packing.PREPROC] == b"mine, not the reference's"
+
+
+# -- a pipeline of the wrong shape --
+
+def _pack_with(tmp_path, name, pipeline, extra=None):
+    """A pack carrying a manifest, the pipeline files, and a given pipeline."""
+    import io
+    import json as _json
+
+    manifest = {
+        "plugins": [
+            {"name": "MLA_0", "processor": "MLA",
+             "resources": {"executable": "model_stage1_mla.elf"},
+             "output_nodes": [{"size": 100}]},
+            {"name": "PassThrough", "output_nodes": [{}] * 6},
+        ]
+    }
+    bodies = {
+        "model_mpk.json": _json.dumps(manifest).encode(),
+        packing.PIPELINE: _json.dumps(pipeline).encode(),
+        packing.PREPROC: b"{}",
+        packing.MLA_CONFIG: _json.dumps({"simaai__params": {"outputs": [{"size": 1}]},
+                                      "caps": {}}).encode(),
+    }
+    bodies.update(extra or {})
+    path = tmp_path / name
+    with tarfile.open(path, "w:gz") as tar:
+        for member, body in bodies.items():
+            info = tarfile.TarInfo(member)
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+    return path
+
+
+GOOD_PIPELINE = {"pipelines": [{"name": "MLA_0", "sequence": [
+    {"processor": "CVU", "kernel": "preproc"},
+    {"processor": "MLA", "kernel": "mla", "executable": "old.elf"},
+]}]}
+
+#: What Model SDK 2.1.3 writes for a graph it decides needs no preprocessing.
+SDK_PIPELINE = {"use_preproc": False, "pipelines": [{"name": "MLA_0", "sequence": [
+    {"processor": "MLA", "kernel": "mla", "executable": "model_stage1_mla.elf"},
+    {"processor": "CVU", "kernel": "detessellate"},
+]}]}
+
+
+def test_a_pipeline_without_a_preproc_stage_is_unusable(tmp_path):
+    """The board's planner routes through preproc. No preproc, no route.
+
+    Model SDK 2.1.3 writes its own pipeline_sequence.json -- it did not write
+    one at all when this module was first needed -- and for a graph it decides
+    needs no preprocessing it writes `use_preproc: false` and a sequence of
+    `[(MLA, mla), (CVU, detessellate)]`. The file is present and complete and
+    the board fails on it exactly as it fails with no file at all.
+    """
+    sdk = _pack_with(tmp_path, "sdk.tar.gz", SDK_PIPELINE)
+    assert packing.unusable_pipeline(sdk) is True
+
+
+def test_a_published_shaped_pipeline_is_left_alone(tmp_path):
+    """Replacing a working pipeline would be the same bug facing the other way."""
+    good = _pack_with(tmp_path, "good.tar.gz", GOOD_PIPELINE)
+    assert packing.unusable_pipeline(good) is False
+
+
+def test_an_unreadable_pipeline_is_not_called_unusable(tmp_path):
+    """Absent or corrupt is `missing_files`' question, and it has its own answer.
+
+    Saying "unusable" here would replace a file on the strength of not having
+    been able to read it, which is a guess dressed as a diagnosis.
+    """
+    import io
+
+    path = tmp_path / "broken.tar.gz"
+    with tarfile.open(path, "w:gz") as tar:
+        body = b"{ not json"
+        info = tarfile.TarInfo(packing.PIPELINE)
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+    assert packing.unusable_pipeline(path) is False
+
+
+def test_the_wrong_shape_is_replaced_from_a_published_pack(tmp_path):
+    """And the replacement points at this pack's ELF, not the reference's."""
+    import json as _json
+
+    broken = _pack_with(tmp_path, "broken.tar.gz", SDK_PIPELINE)
+    reference = _pack_with(tmp_path, "ref.tar.gz", GOOD_PIPELINE)
+
+    assert packing.complete_pack(broken, reference) == [packing.PIPELINE]
+    assert packing.unusable_pipeline(broken) is False
+
+    with tarfile.open(broken) as tar:
+        body = _json.loads(tar.extractfile(packing.PIPELINE).read().decode())
+    stages = body["pipelines"][0]["sequence"]
+    assert [s["kernel"] for s in stages] == ["preproc", "mla"]
+    mla = next(s for s in stages if s["processor"] == "MLA")
+    assert mla["executable"] == "model_stage1_mla.elf", "must name this pack's own ELF"
+
+
+def test_a_complete_and_correct_pack_is_not_rewritten(tmp_path):
+    """Nothing added, nothing touched -- the common case for a published packing."""
+    good = _pack_with(tmp_path, "good.tar.gz", GOOD_PIPELINE)
+    before = good.read_bytes()
+    reference = _pack_with(tmp_path, "ref.tar.gz", GOOD_PIPELINE)
+    assert packing.complete_pack(good, reference) == []
+    assert good.read_bytes() == before
