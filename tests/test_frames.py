@@ -703,7 +703,7 @@ def test_zero_still_means_follow_the_caption():
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: The palette as it was specified, in the order it was given.
-PALETTE_HEX = ["806600", "05299E", "46237A", "080708"]
+PALETTE_HEX = ["F28C28", "05299E", "46237A", "080708"]
 
 
 def bgr_of(hex_rgb: str) -> tuple[int, int, int]:
@@ -726,7 +726,7 @@ def test_the_class_palette_is_the_one_that_was_specified():
 def test_class_colours_cycle_and_are_stable():
     from sima_vision.draw import CLASS_COLORS, class_color
 
-    assert class_color(0) == bgr_of("806600")
+    assert class_color(0) == bgr_of("F28C28")
     assert class_color(1) == bgr_of("05299E")
     assert class_color(len(CLASS_COLORS)) == class_color(0)
     assert class_color(79) == CLASS_COLORS[79 % len(CLASS_COLORS)]
@@ -753,30 +753,20 @@ def test_every_class_colour_gets_a_readable_caption():
         assert ratio >= MIN_CONTRAST, f"{ink} on {color} is only {ratio:.1f}:1"
 
 
-def test_todays_palette_needs_no_override():
-    """Every current band carries white, so the ink never moves in practice.
+def test_the_ink_only_moves_where_white_would_fail():
+    """The override is a repair, not a restyle.
 
-    Worth stating rather than leaving implicit: it is what makes the override
-    a guard rather than something the palette is quietly leaning on.
-    """
-    from sima_vision.draw import WHITE, class_color, readable_text_color
-
-    for class_id in range(4):
-        assert readable_text_color(class_color(class_id), WHITE) == WHITE
-
-
-def test_the_guard_still_catches_a_light_band():
-    """And the guard works, which a palette of dark colours cannot show.
-
-    #F28C28 was in this palette one revision ago and would have been drawn
-    with white at 2.5:1 without this. It stands in for the next light colour
-    someone adds.
+    White on #F28C28 is 2.5:1 -- text you can see is there and cannot read --
+    and black on it is 8.6:1. Every other band keeps the white it already had;
+    a caption turning black over a colour that was never a problem would be a
+    worse surprise than the one this fixes.
     """
     from sima_vision.draw import BLACK, WHITE, contrast_ratio, readable_text_color
 
-    orange = (40, 140, 242)                      # #F28C28
-    assert contrast_ratio(orange, WHITE) < 3.0
-    assert readable_text_color(orange, WHITE) == BLACK
+    assert contrast_ratio(class_color(0), WHITE) < 3.0
+    assert readable_text_color(class_color(0), WHITE) == BLACK
+    for class_id in (1, 2, 3):
+        assert readable_text_color(class_color(class_id), WHITE) == WHITE
 
 
 def test_a_configured_text_colour_is_honoured_while_it_is_readable():
@@ -831,62 +821,34 @@ def one_box(x1, y1, x2, y2, class_id=0, score=0.93):
             "score": score, "class_id": class_id}
 
 
-def test_a_caption_does_not_overhang_a_narrow_box():
-    """At 1.6 scale `person 0.93` is ~300px wide, a distant person is not.
+def test_every_caption_is_the_same_size_whatever_it_labels():
+    """One label size per frame, full stop.
 
-    Overhanging, it covers whatever stands beside that box -- and because the
-    boxes are drawn largest-first, a small object's caption lands on top of its
-    bigger neighbour. That reads as detections flickering in and out, since it
-    depends on where things happen to be standing.
+    A caption that shrank to fit its box made the same class look like two
+    different things across one frame, and gave the smallest detections the
+    smallest text -- which is backwards, since those are the ones worth reading
+    carefully. The size comes from `text_scale` and the frame, never from the
+    box.
     """
+    widths = []
+    for box_w in (30, 120, 190, 400, 900):
+        frame = np.full((1080, 1920, 3), 40, np.uint8)
+        draw_boxes(frame, [one_box(400, 400, 400 + box_w, 900)], ["person"], DrawConfig())
+        widths.append(band_width(frame, class_color(0), 400))
+    assert len(set(widths)) == 1, f"caption size varied with the box: {widths}"
+
+
+def test_the_caption_size_is_the_configured_one():
+    """And that one size is the setting, not something derived behind its back."""
     frame = np.full((1080, 1920, 3), 40, np.uint8)
-    draw_boxes(frame, [one_box(400, 400, 590, 650)], ["person"], DrawConfig())
-    # The band is the fill; a couple of pixels of slack for the rounding.
-    assert band_width(frame, class_color(0), 400) <= 190 + 2
-
-
-def test_a_wide_box_keeps_the_configured_caption_size():
-    """The shrink is a repair for narrow boxes, not a new default size."""
-    wide = np.full((1080, 1920, 3), 40, np.uint8)
-    draw_boxes(wide, [one_box(200, 400, 1400, 900)], ["person"], DrawConfig())
+    draw_boxes(frame, [one_box(400, 400, 500, 900)], ["person"], DrawConfig())
 
     reference = np.full((1080, 1920, 3), 40, np.uint8)
-    draw_caption(reference, "person 0.93", (200, 400), class_color(0), DrawConfig(), 1.0)
+    draw_caption(reference, "person 0.93", (400, 400), class_color(0), DrawConfig(), 1.0)
 
-    assert band_width(wide, class_color(0), 400) == band_width(reference, class_color(0), 400)
-
-
-def test_a_caption_stops_shrinking_before_it_becomes_unreadable():
-    """A caption too small to read is no better than one covering its neighbour."""
-    from sima_vision.draw import CAPTION_MIN_SHRINK
-
-    frame = np.full((1080, 1920, 3), 40, np.uint8)
-    # 30px wide: fitting `person 0.93` into it would mean a tenth of the size.
-    draw_boxes(frame, [one_box(900, 400, 930, 700)], ["person"], DrawConfig())
-    painted = band_width(frame, class_color(0), 400)
-    assert painted > 30, "floored rather than shrunk to nothing"
-
-    reference = np.full((1080, 1920, 3), 40, np.uint8)
-    draw_caption(reference, "person 0.93", (900, 400), class_color(0), DrawConfig(), 1.0)
-    full = band_width(reference, class_color(0), 400)
-    assert painted == pytest.approx(full * CAPTION_MIN_SHRINK, rel=0.12)
-
-
-def test_a_small_box_caption_no_longer_buries_its_larger_neighbour():
-    """The symptom, asserted end to end: boxes vanishing in a crowd.
-
-    The big box is drawn first and the small one's caption last, so before the
-    fit the band landed straight across the big box's outline.
-    """
-    frame = np.full((1080, 1920, 3), 40, np.uint8)
-    big = one_box(200, 300, 700, 900, class_id=1)
-    small = one_box(730, 300, 900, 620, class_id=0)
-    draw_boxes(frame, [big, small], ["person", "bicycle"], DrawConfig())
-
-    # Every row of the big box's right edge must still be its own colour.
-    edge = frame[310:890, 697:700]
-    hits = (edge == np.array(class_color(1), np.uint8)).all(axis=2).any(axis=1)
-    assert hits.all(), f"{(~hits).sum()} rows of the neighbour's box were covered"
+    assert band_width(frame, class_color(0), 400) == band_width(
+        reference, class_color(0), 400
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

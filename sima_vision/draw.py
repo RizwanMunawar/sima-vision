@@ -13,12 +13,11 @@ from . import runtime
 # beside each entry because that is how it was chosen and how it will be
 # checked against a design again.
 #
-# All four take white captions comfortably -- 5.5:1 on the dark yellow, 20:1
-# on the near-black -- but that is a property of this palette, not a rule the
-# drawing relies on. `readable_text_color` picks the ink per band, so a lighter
-# colour dropped in here gets a readable caption instead of a washed-out one.
+# Mixed lightness, which is why the caption ink is chosen per band rather than
+# fixed: white on the orange is 2.5:1 and unreadable where black on it is
+# 8.6:1, and on the near-black that reverses. See `readable_text_color`.
 CLASS_COLORS = [
-    (0, 102, 128),    # #806600
+    (40, 140, 242),   # #F28C28
     (158, 41, 5),     # #05299E
     (122, 35, 70),    # #46237A
     (8, 7, 8),        # #080708
@@ -26,12 +25,6 @@ CLASS_COLORS = [
 
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
-
-#: How far a caption may be shrunk to fit inside its own box. Past this it is
-#: better to overhang than to be unreadable: a caption too small to read is no
-#: more useful than one covering the box next door, and both are worse than a
-#: little overlap.
-CAPTION_MIN_SHRINK = 0.55
 
 #: Contrast a caption must clear against its own band, below which the ink is
 #: overridden. WCAG's large-text threshold, which is the right one here: the
@@ -180,9 +173,14 @@ def caption_text(box: dict, labels: list[str], draw) -> str:
     return " ".join(parts)
 
 
-def draw_caption(frame, text: str, anchor: tuple[int, int], color, draw, scale: float,
-                 max_width: int = 0) -> None:
+def draw_caption(frame, text: str, anchor: tuple[int, int], color, draw, scale: float) -> None:
     """Draw one filled caption band sitting directly above ``anchor``.
+
+    Every caption is the same size, whatever it is labelling: the size comes
+    from ``text_scale`` and the frame, never from the box. A label that changed
+    size with its box would make the same class look like two different things
+    across one frame, and leave the smallest detections -- the ones worth
+    reading carefully -- with the smallest text.
 
     The band flips to sit inside the box when it would otherwise clip off the
     top of the frame, and is nudged left when it would run off the right edge.
@@ -194,9 +192,6 @@ def draw_caption(frame, text: str, anchor: tuple[int, int], color, draw, scale: 
         color: Band fill colour, BGR.
         draw: Visualization settings.
         scale: Frame scale factor from :func:`draw_scale`.
-        max_width: Width of the thing being captioned, in pixels. The band is
-            shrunk to fit inside it, down to :data:`CAPTION_MIN_SHRINK`. 0
-            leaves the band at full size, which is what the banner wants.
     """
     if not text:
         return
@@ -206,37 +201,9 @@ def draw_caption(frame, text: str, anchor: tuple[int, int], color, draw, scale: 
     text_thickness = max(1, int(round(draw.text_thickness * scale)))
     pad = max(2, int(round(draw.text_padding * scale)))
 
-    def measure():
-        (text_w, _), _ = cv2.getTextSize(text, runtime.FONT, text_scale, text_thickness)
-        above, below = text_ink_extent(text, text_scale, text_thickness)
-        return text_w, above, below
-
-    text_w, above, below = measure()
+    (text_w, _), _ = cv2.getTextSize(text, runtime.FONT, text_scale, text_thickness)
+    above, below = text_ink_extent(text, text_scale, text_thickness)
     band_w = text_w + pad * 2
-
-    # A caption band is sized by its text, and at 1.6 scale `person 0.93` is
-    # some 300px wide -- wider than a person standing twenty metres away. Left
-    # to overhang, it covers whatever is beside that box, and since the boxes
-    # are drawn largest-first a small object's caption lands on top of its
-    # bigger neighbour. That reads as detections flickering in and out, because
-    # it depends on where things happen to be standing.
-    #
-    # Refined rather than solved in one step: the font does not scale linearly
-    # -- getTextSize rounds, and so does the padding -- so one pass from the
-    # ratio lands a few percent over. Three is plenty to converge, and the
-    # floor stops it iterating a caption into nothing.
-    applied = 1.0
-    for _ in range(3):
-        if max_width <= 0 or band_w <= max_width or applied <= CAPTION_MIN_SHRINK:
-            break
-        shrink = max(CAPTION_MIN_SHRINK / applied, max_width / band_w)
-        applied *= shrink
-        text_scale *= shrink
-        text_thickness = max(1, int(round(text_thickness * shrink)))
-        pad = max(2, int(round(pad * shrink)))
-        text_w, above, below = measure()
-        band_w = text_w + pad * 2
-
     band_h = above + below + pad * 2
 
     x1, y1 = anchor
@@ -289,8 +256,7 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str], draw) -> None:
             cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
-        draw_caption(frame, caption_text(box, labels, draw), (x1, y1), color, draw,
-                     scale, max_width=x2 - x1)
+        draw_caption(frame, caption_text(box, labels, draw), (x1, y1), color, draw, scale)
 
 
 def draw_fps(frame, fps: float, draw) -> None:
