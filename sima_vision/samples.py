@@ -252,6 +252,49 @@ def parse_boxes(payload: bytes, img_w: int, img_h: int, expected_topk: int) -> l
     return boxes
 
 
+def frame_geometry_warning(frame, frame_w: int, frame_h: int) -> str:
+    """A warning when the decoded frame is not the geometry the graph was told.
+
+    The whole box pipeline is built on these two numbers agreeing. They are
+    probed off the stream's SPS, handed to Neat as the preprocess capacity and
+    the letterbox target, and the box decoder maps its output back into *that*
+    rectangle -- while the overlay is drawn on whatever the decoder actually
+    handed back. When the two differ, every box is placed against a frame that
+    is not the frame being drawn on, and the boxes sit near the people instead
+    of on them, by a margin that grows down and across the picture.
+
+    They can differ honestly. H.264 codes 1080 rows as 1088 and carries the
+    crop in the SPS, so a path that does not apply the crop yields a frame
+    eight rows taller than the geometry every other part of the run agreed on.
+
+    Nothing is corrected here, deliberately. Whether the right fix is a scale
+    or a crop depends on *why* they differ, and guessing wrong moves boxes that
+    were already right. Saying so precisely, once, is worth more than a
+    plausible silent adjustment.
+
+    Args:
+        frame: The decoded BGR frame, or None.
+        frame_w: Width the graph was built for.
+        frame_h: Height the graph was built for.
+
+    Returns:
+        The warning, or "" when the geometry agrees or cannot be read.
+    """
+    if frame is None or getattr(frame, "ndim", 0) < 2:
+        return ""
+    height, width = int(frame.shape[0]), int(frame.shape[1])
+    if (width, height) == (frame_w, frame_h) or not frame_w or not frame_h:
+        return ""
+    return (
+        f"the decoded frame is {width}x{height}, and the graph was built for "
+        f"{frame_w}x{frame_h}.\n"
+        "Boxes are decoded against the second and drawn on the first, so every "
+        "one of them\n"
+        "will sit off its subject. Pin the real geometry and the two agree:\n"
+        f"  --width {width} --height {height}"
+    )
+
+
 def describe_tensors(sample) -> str:
     """One line per tensor: tag, dtype, shape and byte length.
 

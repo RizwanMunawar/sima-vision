@@ -173,8 +173,6 @@ def test_every_environment_variable_is_documented():
         for name, value in vars(module).items()
         if name.endswith("_ENV") and isinstance(value, str)
     }
-    declared.add("FALL_ALERT_SMTP_PASSWORD")
-
     text = README.read_text(encoding="utf-8")
     missing = sorted(name for name in declared if name not in text)
     assert not missing, f"the README never names: {missing}"

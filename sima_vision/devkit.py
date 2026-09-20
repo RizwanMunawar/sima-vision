@@ -42,7 +42,7 @@ DEVKIT_ENV = "SIMA_VISION_DEVKIT"
 OUTPUTS = (
     "detections.mp4", "segmentation.mp4", "falls.mp4",
     "detections.avi", "segmentation.avi", "falls.avi",
-    "frames", "alerts", "config.yaml",
+    "frames", "config.yaml",
 )
 
 

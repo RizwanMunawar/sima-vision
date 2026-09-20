@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pytest
 
-from sima_vision import __version__
+from sima_vision import __version__, cli
 from sima_vision.cli import build_parser, collect_overrides, main
+from sima_vision.console import console
 from sima_vision.tasks import TASKS
 
 REPO = Path(__file__).resolve().parents[1]
@@ -103,44 +105,6 @@ def test_segment_flags():
     assert overrides["segmentation.threshold"] == 0.3
 
 
-def test_fall_flags_reach_the_nested_smtp_section():
-    args = parse(["fall", "--alert-to", "a@x.com", "--smtp-port", "465", "--send"])
-    overrides = collect_overrides(args)
-    assert overrides["alerts.to"] == ["a@x.com"]
-    assert overrides["alerts.smtp.port"] == 465
-    assert overrides["alerts.dry_run"] is False
-
-
-def test_alert_recipient_turns_alerts_on():
-    cfg = TASKS["fall"]().load(
-        None,
-        {"model.path": "m.tar.gz", "source.uri": "c.h264", "alerts.to": ["a@x.com"]},
-        use_file=False,
-    )
-    assert cfg.alerts.enable is True
-    # ...but still a dry run, so nobody is emailed by accident.
-    assert cfg.alerts.dry_run is True
-
-
-def test_send_is_needed_to_actually_send():
-    cfg = TASKS["fall"]().load(
-        None,
-        {
-            "model.path": "m.tar.gz", "source.uri": "c.h264",
-            "alerts.to": ["a@x.com"], "alerts.from": "b@x.com",
-            "alerts.dry_run": False,
-        },
-        use_file=False,
-    )
-    assert cfg.alerts.enable is True
-    assert cfg.alerts.dry_run is False
-
-
-def test_config_and_no_config_are_mutually_exclusive():
-    with pytest.raises(SystemExit):
-        parse(["detect", "--config", "a.yaml", "--no-config"])
-
-
 def test_minimal_strips_the_sinks():
     task = TASKS["segment"]()
     cfg = task.load(
@@ -150,7 +114,7 @@ def test_minimal_strips_the_sinks():
     stripped = task.post_process(cfg, args)
     assert stripped.segment.masks == "off"
     assert stripped.blur.enable is False
-    assert not (stripped.save_enable or stripped.video_enable or stripped.insight_enable)
+    assert not (stripped.save_enable or stripped.video_enable)
 
 
 def test_validate_exits_zero_without_a_board():
@@ -216,3 +180,153 @@ def test_validate_prints_through_the_console(capsys):
     out = capsys.readouterr().out
     assert "config OK" in out
     assert "nothing was downloaded" in out
+
+
+def test_an_error_that_names_itself_is_not_headed_twice(capsys):
+    """ultralytics prefixes its own messages, and a bad .pt is the common one.
+
+    It came out as `ERROR  ERROR  best.pt is not a loadable checkpoint`, which
+    reads as a bug in this program rather than a problem with the file.
+    """
+    console.error("ERROR  best.pt is not a loadable checkpoint")
+    err = capsys.readouterr().err
+    assert err.count("ERROR") == 1
+    assert "best.pt is not a loadable checkpoint" in err
+
+
+def test_an_ordinary_error_still_gets_its_heading(capsys):
+    console.error("no such file: best.pt")
+    err = capsys.readouterr().err
+    assert "ERROR" in err and "no such file: best.pt" in err
+
+
+# -- the frame-rate badge --
+
+def test_the_badge_can_be_restyled_without_a_config_file():
+    """Every knob was reachable only through `visualization.hud` in YAML.
+
+    It had been configurable since the first version, which is not the same as
+    being findable: the flag table listed `--no-hud` and nothing else, so the
+    question people actually asked was whether it could be changed at all.
+    """
+    args = parse(["segment", "--hud-scale", "2.5", "--hud-thickness", "4",
+                  "--hud-bg", "0,0,255", "--hud-color", "0,255,255",
+                  "--hud-padding", "30"])
+    assert collect_overrides(args) == {
+        "visualization.hud.text_scale": 2.5,
+        "visualization.hud.text_thickness": 4,
+        "visualization.hud.bg_color": [0, 0, 255],
+        "visualization.hud.text_color": [0, 255, 255],
+        "visualization.hud.padding": 30,
+    }
+
+
+def test_the_badge_flags_are_on_every_app():
+    """One overlay, one set of flags. detect and fall draw the same badge."""
+    for name in TASKS:
+        args = parse([name, "--hud-bg", "10,20,30"])
+        assert collect_overrides(args)["visualization.hud.bg_color"] == [10, 20, 30]
+
+
+def test_a_colour_is_three_channels_of_0_to_255():
+    assert cli.bgr_colour("0,255,255") == [0, 255, 255]
+    assert cli.bgr_colour(" 1 , 2 , 3 ") == [1, 2, 3]
+
+
+@pytest.mark.parametrize("value", ["255,0", "1,2,3,4", "300,0,0", "red", "1,2,x", ""])
+def test_a_colour_that_is_not_one_is_refused_with_the_reason(value):
+    """A flag that reads correctly and paints the wrong colour is worse than
+    one that refuses. `red` is not accepted precisely because it would have to
+    mean 0,0,255 here, and nobody expects that of the word."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli.bgr_colour(value)
+
+
+def test_the_channel_order_matches_the_config_file():
+    """BGR, because the config file and OpenCV are both BGR.
+
+    Taking RGB on the flag and BGR in the YAML would make the same three
+    numbers mean two different colours depending on where they were written.
+    """
+    import inspect
+
+    doc = inspect.getdoc(cli.bgr_colour) or ""
+    assert "BGR" in doc
+    # Red is 0,0,255 in this order. If that ever flips, this is the canary.
+    assert cli.bgr_colour("0,0,255") == [0, 0, 255]
+
+
+# -- stills are opt-in; the video is the output --
+
+def test_no_app_writes_stills_unless_asked():
+    """The annotated video is what people came for.
+
+    A run used to drop a still every 10 frames beside it, which on a 1080p clip
+    is a few hundred JPEGs nobody asked for and everybody then deleted. Asserted
+    across every app, because this is the kind of default that gets restored in
+    one task and not the others.
+    """
+    for name in TASKS:
+        cfg = TASKS[name]().load(
+            None, {"model.path": "m.tar.gz", "source.uri": "c.h264"}, use_file=False
+        )
+        assert cfg.save_enable is False, name
+        assert cfg.video_enable is True, name
+
+
+@pytest.mark.parametrize(
+    ("argv", "enabled"),
+    [
+        ([], None),                                   # not given: the file decides
+        (["--save"], True),
+        (["--save-every", "5"], True),                # asking the rate asks for stills
+        (["--save-dir", "shots"], True),              # so does asking where
+        (["--save-every", "0"], None),                # 0 disables via the rate
+        (["--save-every", "5", "--no-save"], False),  # an explicit no still wins
+        (["--no-save"], False),
+    ],
+)
+def test_asking_where_or_how_often_asks_for_stills(argv, enabled):
+    """`--save-every 5` on its own has to write something.
+
+    Stills are off by default, so the flag would otherwise be accepted and
+    change nothing -- and `--save-every 0` already carries that same
+    enable/disable sense in the other direction.
+    """
+    args = parse(["detect", *argv])
+    assert collect_overrides(args).get("output.save.enable") is enabled
+
+
+def test_save_every_zero_writes_nothing_even_where_stills_are_on():
+    """0 disables through the rate, so it does not need the enable flag too.
+
+    Which is why it is the one `--save-every` value that implies nothing: a
+    config file saying `enable: true` plus `--save-every 0` still writes no
+    stills, and leaving the flag alone keeps that readable.
+    """
+    from sima_vision.sinks import wants_jpeg
+
+    args = parse(["detect", "--save-every", "0"])
+    cfg = TASKS["detect"]().load(
+        Path(__file__).parent / "configs" / "detect.yaml", collect_overrides(args)
+    )
+    assert cfg.save_enable is True
+    assert not any(wants_jpeg(cfg, index) for index in range(50))
+
+
+def test_a_config_file_can_still_turn_stills_on():
+    """The default moved; the setting did not. An existing config keeps working."""
+    cfg = TASKS["detect"]().load(Path(__file__).parent / "configs" / "detect.yaml", {})
+    assert cfg.save_enable is True
+    assert cfg.save_every == 10
+
+
+def test_the_rate_survives_the_default_moving():
+    """`save_every` is the rate once stills are on, not a second off switch.
+
+    Zeroing it as well as the enable flag would have made `--save` alone write
+    nothing, which is the one thing that flag has to do.
+    """
+    args = parse(["detect", "--save"])
+    cfg = TASKS["detect"]().load(None, collect_overrides(args), use_file=False)
+    assert (cfg.save_enable, cfg.save_every) == (True, 10)

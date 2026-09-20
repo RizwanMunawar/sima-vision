@@ -16,7 +16,7 @@ from ..samples import (
     joined_field,
     parse_boxes,
 )
-from ..sinks import Pipeline, box_metadata
+from ..sinks import Pipeline
 from .base import Task
 
 DETECT_DRAW = DrawConfig(box_thickness=3, centre_dot=True)
@@ -24,7 +24,6 @@ DETECT_DRAW = DrawConfig(box_thickness=3, centre_dot=True)
 
 class DetectRuntime(TaskRuntime):
     output_label = "detector_output"
-    stream = "object-detection"
     unit = "detections"
 
     def decode(self, pipeline: Pipeline, cfg, sample, index: int):
@@ -34,6 +33,7 @@ class DetectRuntime(TaskRuntime):
         payload, _ = extract_bbox_payload(joined_field(sample, "detections", 1))
         boxes = parse_boxes(payload, pipeline.frame_w, pipeline.frame_h, cfg.max_detections)
         frame = frame_to_bgr(first_tensor(joined_field(sample, "frame", 0)))
+        self.check_geometry(pipeline, frame)
         # `boxes` and `frame` are copies, so the decoder's buffer is free from
         # here on. See FrameStamp for why that matters.
         return frame, boxes, 0.0
@@ -41,14 +41,14 @@ class DetectRuntime(TaskRuntime):
     def render(self, cfg, pipeline: Pipeline, frame, results, fps: float):
         """Draw once per frame and share the result between the video and JPEG sinks."""
         annotated = frame.copy()
-        # FPS first, so a detection in the top-left corner is never hidden by it.
+        draw_boxes(annotated, results, pipeline.labels, cfg.draw)
+        # FPS last, so nothing is ever drawn over it. Drawn first, a detection
+        # in the top-left corner buried the badge under its caption -- and the
+        # badge is the one reading on the frame that is not about the picture,
+        # so it is the one that has to stay legible.
         if cfg.video_hud:
             draw_fps(annotated, fps, cfg.draw)
-        draw_boxes(annotated, results, pipeline.labels, cfg.draw)
         return annotated
-
-    def metadata(self, pipeline: Pipeline, results) -> list[dict]:
-        return box_metadata(results, pipeline.labels, pipeline.frame_w, pipeline.frame_h)
 
 
 class DetectTask(Task):
@@ -62,7 +62,6 @@ class DetectTask(Task):
         family="yolo26",
         save_dir="frames",
         video_path="detections.mp4",
-        insight_enable=False,
         draw=DETECT_DRAW,
     )
 

@@ -37,7 +37,7 @@ from ..neat import (
 from ..recorder import NeatVideoWriter
 from ..runloop import Stopper, TaskRuntime, run_pipeline, sink_depth_for
 from ..runtime import FAMILY_DECODE_TOKENS
-from ..sinks import Pipeline, load_labels, open_video_writer, start_insight
+from ..sinks import Pipeline, load_labels, open_video_writer
 
 
 class Task:
@@ -45,8 +45,8 @@ class Task:
 
     A task supplies its config type, its CLI flags, its graph labels and a
     :class:`~sima_vision.runloop.TaskRuntime`. Everything else -- probing the
-    source, loading the model, building the graph, bringing up Insight, opening
-    the writer, the pull loop and the closing report -- is shared.
+    source, loading the model, building the graph, opening the writer, the pull
+    loop and the closing report -- is shared.
 
     Attributes:
         name: Subcommand name, such as ``detect``. Also the key it is
@@ -101,7 +101,7 @@ class Task:
         """Let one flag imply another before the overrides are applied.
 
         Override to express things like "naming a recipient means you want
-        alerts on". Returns the dict to apply; mutating and returning the
+        blur on". Returns the dict to apply; mutating and returning the
         argument is fine.
         """
         return overrides
@@ -212,7 +212,7 @@ class Task:
         return pipeline
 
     def build_pipeline(self, cfg, pipeline: Pipeline, geometry, step) -> None:
-        """Step: flow control, the Neat graph, Insight and the output sinks."""
+        """Step: flow control, the Neat graph and the output sinks."""
         width, height, fps = geometry
         pipeline.frame_w, pipeline.frame_h, pipeline.fps = width, height, fps
         pipeline.source_frames = source_frame_count(cfg)
@@ -265,8 +265,6 @@ class Task:
         # continuous recording.
         self.pending = list(pieces[1:])
 
-        if cfg.insight_enable:
-            start_insight(cfg, pipeline, width, height, fps, step)
         if cfg.save_enable:
             step.detail(
                 f"stills: {cfg.save_dir}/ every {cfg.save_every} frames "
@@ -283,12 +281,12 @@ class Task:
                 f"video: {pipeline.writer_path} encoder={encoder} "
                 f"fps={cfg.video_fps or fps} hud={cfg.video_hud}"
             )
-        if not (cfg.save_enable or cfg.video_enable or cfg.insight_enable):
+        if not (cfg.save_enable or cfg.video_enable):
             # Not an error. `stall_causes` tells a stalled run to come back with
             # `--no-save --no-video`, and for a while the app answered that
-            # advice with "enable at least one of output.save, output.video or
-            # output.insight" -- refusing the one run that separates a slow app
-            # from a stalled graph. Saying what the run does is enough.
+            # advice with "enable at least one of output.save or output.video"
+            # -- refusing the one run that separates a slow app from a stalled
+            # graph. Saying what the run does is enough.
             step.note(
                 "no outputs are enabled, so this run writes nothing and measures "
                 "the graph alone. That is what tells a slow app apart from a "

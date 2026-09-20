@@ -1,4 +1,4 @@
-"""Overlay drawing: palette, text metrics, boxes, the HUD badge and the banner.
+"""Overlay drawing: palette, text metrics, boxes and the HUD badge.
 
 Sizes in :class:`~sima_vision.config.DrawConfig` are expressed for a 1080p
 frame and multiplied by :func:`draw_scale`, so a config tuned on a test clip
@@ -9,15 +9,29 @@ from __future__ import annotations
 
 from . import runtime
 
-# A 20-colour palette with even hue spacing and consistent saturation, so
-# neighbouring classes stay distinguishable and nothing vanishes against a
-# bright or dark frame. BGR, because that is what OpenCV expects.
+# The class palette, BGR because that is what OpenCV expects. Written as hex
+# beside each entry because that is how it was chosen and how it will be
+# checked against a design again.
+#
+# Mixed lightness, which is why the caption ink is chosen per band rather than
+# fixed: white on the orange is 2.5:1 and unreadable where black on it is
+# 8.6:1, and on the near-black that reverses. See `readable_text_color`.
 CLASS_COLORS = [
-    (56, 56, 255), (49, 210, 207), (10, 249, 72), (227, 195, 0), (255, 112, 132),
-    (144, 31, 255), (29, 178, 255), (49, 121, 255), (0, 194, 255), (98, 205, 0),
-    (185, 243, 52), (255, 156, 87), (255, 88, 178), (184, 61, 245), (86, 96, 255),
-    (0, 151, 255), (0, 229, 178), (146, 255, 51), (255, 194, 26), (255, 92, 92),
+    (40, 140, 242),   # #F28C28
+    (158, 41, 5),     # #05299E
+    (122, 35, 70),    # #46237A
+    (8, 7, 8),        # #080708
 ]
+
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+
+#: Contrast a caption must clear against its own band, below which the ink is
+#: overridden. WCAG's large-text threshold, which is the right one here: the
+#: captions are 1.6 scale with 4px strokes at 1080p, far past the 18pt that
+#: qualifies. Using the 4.5 meant for body text would flip perfectly legible
+#: white captions to black over a band that was never a problem.
+MIN_CONTRAST = 3.0
 
 # All digits share one vertical extent in this font, so folding them to a single
 # digit keeps the cache to one entry per distinct caption rather than one per
@@ -34,9 +48,52 @@ def class_color(class_id: int) -> tuple[int, int, int]:
         class_id: Model class id.
 
     Returns:
-        A BGR tuple, repeating every 20 classes.
+        A BGR tuple, repeating every :data:`CLASS_COLORS` entries.
     """
     return CLASS_COLORS[class_id % len(CLASS_COLORS)]
+
+
+def relative_luminance(bgr: tuple[int, int, int]) -> float:
+    """WCAG relative luminance of a BGR colour.
+
+    The real curve rather than a gamma approximation, because the decision it
+    feeds is binary and the two answers are furthest apart exactly in the
+    mid-tones where an approximation drifts most.
+    """
+    b, g, r = bgr
+
+    def channel(value: int) -> float:
+        c = value / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def contrast_ratio(one: tuple[int, int, int], two: tuple[int, int, int]) -> float:
+    """WCAG contrast between two BGR colours, from 1.0 to 21.0."""
+    a, b = relative_luminance(one), relative_luminance(two)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+def readable_text_color(band: tuple[int, int, int],
+                        preferred: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Ink for a caption sitting on ``band``.
+
+    ``preferred`` is honoured whenever it clears :data:`MIN_CONTRAST`, so the
+    configured ``text_color`` is what gets drawn in every ordinary case. It is
+    overridden only when it would be unreadable, and then by whichever of black
+    or white is further from the band.
+
+    Every band currently in use takes white, so this changes nothing today. It
+    is here because the palette is edited by hand and lightness is the thing
+    that gets picked last: white on #F28C28 is 2.5:1, text you can see is
+    there and cannot read, while black on it is 8.6:1 -- and on #080708 that
+    reverses, 20:1 against 1.04:1. One fixed ink cannot serve both, and the
+    band colour is the only thing that knows which case it is.
+    """
+    if contrast_ratio(band, preferred) >= MIN_CONTRAST:
+        return preferred
+    return BLACK if relative_luminance(band) > 0.18 else WHITE
 
 
 def text_ink_extent(text: str, text_scale: float, text_thickness: int) -> tuple[int, int]:
@@ -119,6 +176,12 @@ def caption_text(box: dict, labels: list[str], draw) -> str:
 def draw_caption(frame, text: str, anchor: tuple[int, int], color, draw, scale: float) -> None:
     """Draw one filled caption band sitting directly above ``anchor``.
 
+    Every caption is the same size, whatever it is labelling: the size comes
+    from ``text_scale`` and the frame, never from the box. A label that changed
+    size with its box would make the same class look like two different things
+    across one frame, and leave the smallest detections -- the ones worth
+    reading carefully -- with the smallest text.
+
     The band flips to sit inside the box when it would otherwise clip off the
     top of the frame, and is nudged left when it would run off the right edge.
 
@@ -152,7 +215,7 @@ def draw_caption(frame, text: str, anchor: tuple[int, int], color, draw, scale: 
     cv2.rectangle(frame, (left, top), (left + band_w, top + band_h), color, -1)
     cv2.putText(
         frame, text, (left + pad, top + pad + above), runtime.FONT, text_scale,
-        draw.text_color, text_thickness, cv2.LINE_AA,
+        readable_text_color(color, draw.text_color), text_thickness, cv2.LINE_AA,
     )
 
 
@@ -254,36 +317,3 @@ def draw_fps(frame, fps: float, draw) -> None:
     )
 
 
-def draw_banner(frame, text: str, draw) -> None:
-    """Draw a full-width alert strip across the bottom of the frame.
-
-    A red box around one person is easy to miss on a wall of camera tiles. A
-    band across the whole frame is not, which is the point of it.
-
-    Args:
-        frame: BGR image, modified in place.
-        text: Banner text.
-        draw: Visualization settings.
-    """
-    cv2, np = runtime.cv2, runtime.np
-    height, width = frame.shape[:2]
-    scale = draw_scale(frame, draw)
-    text_scale = (draw.banner_text_scale or draw.text_scale) * scale
-    text_thickness = max(1, int(round((draw.banner_text_thickness or draw.text_thickness) * scale)))
-    pad = max(4, int(round(draw.banner_padding * scale)))
-
-    (text_w, _), _ = cv2.getTextSize(text, runtime.FONT, text_scale, text_thickness)
-    above, below = text_ink_extent(text, text_scale, text_thickness)
-    band_h = above + below + pad * 2
-    top = height - band_h
-
-    strip = frame[top:height, 0:width]
-    tint = np.empty_like(strip)
-    tint[:] = draw.banner_bg_color
-    # Translucent rather than solid, so the band never hides the thing it is
-    # drawing attention to.
-    cv2.addWeighted(tint, draw.banner_alpha, strip, 1.0 - draw.banner_alpha, 0.0, dst=strip)
-    cv2.putText(
-        frame, text, (max(pad, (width - text_w) // 2), top + pad + above),
-        runtime.FONT, text_scale, draw.banner_text_color, text_thickness, cv2.LINE_AA,
-    )

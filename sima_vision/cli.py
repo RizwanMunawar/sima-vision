@@ -35,22 +35,28 @@ from __future__ import annotations
 import argparse
 import os
 import tarfile
+import time
 from pathlib import Path
 
 from . import __version__
 from .assets import default_model_path, ensure_model, models_dir
 from .bootstrap import detect_environment, ensure_runtime
 from .config import DECODER_TUNINGS, VIDEO_ENCODERS
-from .console import console, human_bytes
+from .console import console, human_bytes, human_time
 from .devkit import DEVKIT_ENV, run_pull, run_push
 from .export import (
+    COMPILE_LOG,
     DEFAULT_IMGSZ,
     DEFAULT_OPSET,
+    choose_sdk_python,
     compile_recipe,
     export_onnx,
-    model_sdk_present,
+    needs_fixed_batch,
     next_steps,
+    pin_batch_size,
+    requirements_help,
     run_recipe,
+    sdk_candidates,
 )
 from .neat import describe_preprocess
 from .pack import complete_pack
@@ -65,7 +71,7 @@ examples:
   sima-vision detect  --source clip.mp4                    reframed for you, once
   sima-vision detect  --source https://example.com/clip.h264
   sima-vision segment --blur --keep-classes person
-  sima-vision fall    --source rtsp://cam/live --alert-to ops@example.com
+  sima-vision fall    --source rtsp://cam/live
 
 without a board:
   sima-vision detect --validate            check the settings, no hardware at all
@@ -214,30 +220,84 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         help="Target bitrate for the hardware encoder. Default 12000.",
     )
     out.add_argument(
+        "--save", dest="output.save.enable", action="store_const", const=True,
+        help="Also write annotated stills. Off by default: the video is the "
+             "output, and stills every 10 frames left hundreds of JPEGs beside "
+             "it that nobody asked for.",
+    )
+    out.add_argument(
         "--save-dir", dest="output.save.dir", metavar="DIR",
-        help="Where to write annotated stills.",
+        help="Where to write annotated stills. Implies --save.",
     )
     out.add_argument(
         "--save-every", dest="output.save.every", type=int, metavar="N",
-        help="Write every Nth still. Default 10; 0 disables.",
+        help="Write every Nth still. Default 10 once stills are on; implies "
+             "--save. 0 disables.",
     )
     out.add_argument(
         "--no-save", dest="output.save.enable", action="store_const", const=False,
-        help="Do not write stills.",
+        help="Do not write stills. The default, so this is only needed to "
+             "override a config file that turns them on.",
     )
     out.add_argument(
         "--no-hud", dest="output.video.hud", action="store_const", const=False,
         help="Leave the frame-rate badge off the overlay.",
     )
+    # The badge's look was configurable from the first version and reachable
+    # only through a config file, which meant nobody found it. These four are
+    # the ones people actually want; the other eight stay in
+    # `visualization.hud`.
     out.add_argument(
-        "--insight", dest="output.insight.enable", action="store_const", const=True,
-        help="Stream to Neat Insight over UDP. Off by default: its encoder shares "
-             "the codec daemon with the decoder, so it can stall a file run.",
+        "--hud-scale", dest="visualization.hud.text_scale", type=float,
+        metavar="N",
+        help="Frame-rate badge font size. Default 2.4, which is 1.5x the caption "
+             "scale; 0 follows the caption scale exactly.",
     )
     out.add_argument(
-        "--insight-host", dest="output.insight.host", metavar="HOST",
-        help="Insight address as the DevKit sees it. Default 127.0.0.1.",
+        "--hud-thickness", dest="visualization.hud.text_thickness", type=int,
+        metavar="N",
+        help="Badge stroke weight. Default 6, which is 1.5x the caption thickness; "
+             "0 follows the caption thickness exactly.",
     )
+    out.add_argument(
+        "--hud-bg", dest="visualization.hud.bg_color", type=bgr_colour,
+        metavar="B,G,R",
+        help="Badge fill colour, as B,G,R. Default 132,28,193 (#C11C84).",
+    )
+    out.add_argument(
+        "--hud-color", dest="visualization.hud.text_color", type=bgr_colour,
+        metavar="B,G,R",
+        help="Badge text colour, as B,G,R. Default 255,255,255.",
+    )
+    out.add_argument(
+        "--hud-padding", dest="visualization.hud.padding", type=int, metavar="PX",
+        help="Gap between badge text and its edge, which is what sizes the badge. "
+             "Default 22; 0 follows the caption padding.",
+    )
+
+
+def bgr_colour(value: str) -> list[int]:
+    """Parse ``B,G,R`` for a colour flag.
+
+    BGR rather than RGB because the whole overlay is OpenCV's, and one
+    convention throughout beats a flag that reverses what the config file next
+    to it means. Named colours are deliberately not accepted: `red` would have
+    to be `0,0,255` here, and a flag that reads correctly and paints the wrong
+    colour is worse than one that only takes numbers.
+    """
+    parts = [part.strip() for part in str(value).split(",")]
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError(
+            f"expected three numbers as B,G,R -- got {value!r}"
+        )
+    channels = []
+    for part in parts:
+        if not part.isdigit() or not 0 <= int(part) <= 255:
+            raise argparse.ArgumentTypeError(
+                f"{part!r} is not a channel value: each of B, G and R is 0-255"
+            )
+        channels.append(int(part))
+    return channels
 
 
 def add_config_arguments(parser: argparse.ArgumentParser) -> None:
@@ -382,7 +442,7 @@ def add_pull_parser(subparsers) -> None:
         description=(
             "Copy a run's output back to this machine. With no names it asks "
             "for everything any task could have written -- the annotated video, "
-            "frames/, alerts/ and config.yaml -- and takes whatever is there, "
+            "frames/ and config.yaml -- and takes whatever is there, "
             "so it does not need to be told which task ran."
         ),
         epilog=(
@@ -405,12 +465,59 @@ def collect_overrides(args: argparse.Namespace) -> dict:
 
     ``None`` means the flag was not given, which is how an unset flag defers to
     the config file rather than overwriting it with an argparse default.
+
+    Asking where the stills go, or how often, is taken as asking for stills.
+    They are off by default, so on its own `--save-every 5` would be accepted
+    and write nothing -- and `--save-every 0` already carries that same
+    enable/disable sense in the other direction. An explicit `--no-save`
+    alongside either still wins, because it lands on the same key first.
     """
-    return {
+    overrides = {
         key: value
         for key, value in vars(args).items()
         if "." in key and value is not None
     }
+    asks_for_stills = overrides.get("output.save.every") or overrides.get(
+        "output.save.dir"
+    )
+    if asks_for_stills and "output.save.enable" not in overrides:
+        overrides["output.save.enable"] = True
+    return overrides
+
+
+class Narration:
+    """One long-running thing's own output, line by line, under a step.
+
+    Every line is stamped with how long that thing has been going. A compile
+    takes ten to fifteen minutes, and the stamps are what separate a slow phase
+    from a stuck one while it runs -- and afterwards, what says which phase to
+    blame. Dimmed, because it is the SDK talking and not this program.
+    """
+
+    def __init__(self, step) -> None:
+        self.step = step
+        self.started = time.perf_counter()
+        self.lines = 0
+
+    @property
+    def elapsed(self) -> float:
+        return time.perf_counter() - self.started
+
+    def line(self, text: str) -> None:
+        """One line of output. Counted always; shown unless it is blank.
+
+        Counted before the blank check, so the total this reports is the log's
+        own length rather than the number of lines that happened to be worth
+        printing.
+        """
+        self.lines += 1
+        if not text.strip():
+            return
+        self.step.note(f"{human_time(self.elapsed):>6}  {text}")
+
+    def silence(self, elapsed: float) -> None:
+        """Nothing said for a while. Says so, rather than looking hung."""
+        self.step.note(f"{human_time(elapsed):>6}  still working")
 
 
 def run_compile(args) -> int:
@@ -427,31 +534,79 @@ def run_compile(args) -> int:
             "the board decodes boxes itself, so the head's raw tensors are exported\n"
             "rather than ultralytics' assembled [1, 84, 8400] output"
         )
-        shapes = export_onnx(weights, onnx_path, args.imgsz, args.opset)
+        narration = Narration(step)
+        shapes = export_onnx(
+            weights, onnx_path, args.imgsz, args.opset, on_line=narration.line,
+        )
         for name, shape in shapes.items():
             step.detail(f"{name:<16} {tuple(shape)}")
-        step.done(f"{onnx_path} ({human_bytes(onnx_path.stat().st_size)})")
+        step.done(f"{onnx_path} ({human_bytes(onnx_path.stat().st_size)})", timed=True)
 
     with console.step("Compiling the DevKit pack", "compile") as step:
         # The two halves fail for different reasons and want different answers,
         # so they are asked separately. Collapsed into one branch, a machine
         # that was simply missing a recipe read as one that could never compile.
-        if not model_sdk_present():
+        # Which python, not whether this one. The recipe runs as a subprocess,
+        # so the SDK has to be importable to *it* -- and `pip install
+        # sima-vision` and `activate-model-compiler` land in different
+        # virtualenvs often enough that asking only about this interpreter
+        # stopped compiles on machines that could have finished them.
+        sdk_python, absent = choose_sdk_python()
+        if sdk_python is None:
             recipe_path = write_recipe(out_dir, step)
-            step.done("stopped at the ONNX: no `afe` module, so no Model SDK here")
-            console.warn(next_steps(onnx_path, recipe_path))
+            step.done("stopped at the ONNX: no python here can import `afe`")
+            console.warn(next_steps(onnx_path, recipe_path, sdk_candidates()))
+            return 0
+        step.detail(f"Model SDK: {sdk_python}")
+
+        # Reported before the pack download, not after: 21 MB spent to
+        # discover that the interpreter cannot run what is inside it is 21 MB
+        # wasted, and the answer was known without spending any of it.
+        if absent:
+            step.done("stopped at the ONNX: the compile's own imports are not all here")
+            console.warn(requirements_help(absent, sdk_python))
             return 0
 
-        recipe_path = write_recipe(out_dir, step, fetch_if_missing=True)
+        recipe_path = write_recipe(out_dir, step)
         if recipe_path is None:
             step.done("stopped at the ONNX: no pack to take a compile recipe from")
             console.warn(next_steps(onnx_path, None))
             return 0
 
-        step.note("quantizing and tessellating. This takes a few minutes.")
-        pack = run_recipe(recipe_path, onnx_path, out_dir)
+        log_path = out_dir / COMPILE_LOG
+        step.note(
+            "quantizing to bfloat16, calibrating, tessellating for the MLA and\n"
+            "emitting the ELF. Ten to fifteen minutes is normal."
+        )
+        step.note(f"every line below is the recipe's own, and all of it lands in {log_path}")
+        pack = None
+        # Two attempts at most, and the second only for the one failure afe
+        # names a fix for. See `pin_batch_size`.
+        for attempt in (1, 2):
+            narration = Narration(step)
+            try:
+                pack = run_recipe(
+                    recipe_path, onnx_path, out_dir,
+                    on_line=narration.line, on_silence=narration.silence,
+                    python=sdk_python,
+                )
+                break
+            except RuntimeError:
+                retry = (
+                    attempt == 1
+                    and needs_fixed_batch(log_path)
+                    and pin_batch_size(recipe_path)
+                )
+                if not retry:
+                    raise
+                step.note(
+                    "afe will not load this graph with the batch size left flexible:\n"
+                    "its attention blocks reshape across the batch axis. Pinning it to 1\n"
+                    "and running the compile again, which is what afe asked for."
+                )
+        step.detail(f"{narration.lines} lines of compiler output -> {log_path}")
         finish_pack(pack, step)
-        step.done(f"{pack} ({human_bytes(pack.stat().st_size)})")
+        step.done(f"{pack} ({human_bytes(pack.stat().st_size)})", timed=True)
 
     console.report(f"run it with:  sima-vision detect --model {pack.name}")
     console.report(f"send it over: sima-vision push {pack}")
@@ -486,23 +641,28 @@ def finish_pack(pack: Path, step) -> None:
         step.detail(f"added {', '.join(added)} from {reference.name}")
 
 
-def write_recipe(out_dir: Path, step, fetch_if_missing: bool = False) -> Path | None:
+def write_recipe(out_dir: Path, step) -> Path | None:
     """Copy a published pack's own compile script next to the ONNX.
 
     Taken from a pack rather than written here, because the settings that
     matter -- bfloat16, MSE calibration, the MLA tessellation layouts -- are
     the ones SiMa actually shipped, and a paraphrase of them would drift.
 
+    A pack is downloaded when there is none to read. It used to be fetched only
+    by the caller that was about to compile, on the reasoning that 21 MB is not
+    worth spending on a machine that was going to stop at the ONNX anyway. What
+    that actually bought was the worst guidance of the three: a machine with no
+    Model SDK printed "compile it with the Model SDK" instead of the exact
+    command, because the recipe it would have named was the thing it had
+    skipped. The pack is public -- a plain GET off the GitHub release, no login
+    -- and it is cached, so it is a one-time cost either way.
+
     Args:
         out_dir: Where the recipe is written, beside the ONNX.
         step: The console step to report under.
-        fetch_if_missing: Download a pack when there is none to read. Only the
-            caller that is about to compile asks for this: it is a 21 MB
-            download for a file inside it, which is worth it to finish the job
-            and not worth it on a machine that was going to stop anyway.
     """
     pack = reference_pack()
-    if pack is None and fetch_if_missing:
+    if pack is None:
         # Every pack carries the same recipe, so the smallest one will do.
         step.detail("no pack here to take a recipe from, fetching the nano one")
         try:
@@ -511,9 +671,14 @@ def write_recipe(out_dir: Path, step, fetch_if_missing: bool = False) -> Path | 
             step.note(str(exc))
         pack = reference_pack()
     if pack is None:
+        # Not a login problem, whatever the download said: the default packs
+        # are on the public release. Something stopped the GET, and the only
+        # other way to a recipe is a pack that is already on a machine.
         step.note(
-            "no model pack here to copy a recipe from. Any real run fetches one,\n"
-            "and the recipe comes inside it."
+            f"no model pack in {models_dir()} to copy a recipe from, and the recipe\n"
+            "comes inside one. The download above is the usual way to get one; if it\n"
+            "cannot reach the release from here, bring a pack over instead:\n"
+            "  sima-vision push <any pack>       # from a machine that has one"
         )
         return None
     try:
@@ -547,8 +712,6 @@ def print_validation(task, cfg) -> None:
         outputs.append(f"video={cfg.video_path}")
     if cfg.save_enable:
         outputs.append(f"stills={cfg.save_dir}/ every={cfg.save_every}")
-    if cfg.insight_enable:
-        outputs.append(f"insight={cfg.insight_host}:{cfg.video_port_base}")
     lines.append(f"output:  {' '.join(outputs) or '<nothing written>'}")
     for line in lines:
         console.info(f"  {line}")

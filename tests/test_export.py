@@ -14,6 +14,7 @@ last step, and that the recipe it hands over is the one the pack shipped.
 from __future__ import annotations
 
 import io
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -403,6 +404,538 @@ def test_a_pack_that_was_already_there_is_not_claimed_as_new(tmp_path):
     (build / "stale_mpk.tar.gz").write_bytes(b"old")
     with pytest.raises(RuntimeError, match="no .tar.gz"):
         export.run_recipe(make_recipe(tmp_path, "pass"), tmp_path / "x.onnx", build)
+# -- what the export needs, asked before it needs it --
+
+def test_a_missing_onnx_is_caught_before_the_trace(tmp_path, monkeypatch):
+    """The Palette container has torch and ultralytics and no onnx.
+
+    torch only reaches for onnx at the *end* of the trace, so this arrived a
+    minute in, as `OnnxExporterError: Module onnx is not installed!` wrapped in
+    "the export failed inside the model" -- naming the model, which was fine,
+    and not naming the one command that fixes it.
+    """
+    import importlib.util
+
+    real = importlib.util.find_spec
+
+    # torch and ultralytics are answered rather than looked up. The scenario is
+    # a container that has both and not onnx, and CI has none of the three --
+    # looked up, this would assert about the runner instead of the preflight.
+    present = object()
+
+    def without_onnx(name, *args, **kwargs):
+        if name == "onnx":
+            return None
+        if name in ("torch", "ultralytics"):
+            return present
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", without_onnx)
+    assert export.missing_requirements() == ["onnx"]
+
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"not really a checkpoint")
+    with pytest.raises(RuntimeError) as caught:
+        export.export_onnx(weights, tmp_path / "best-raw.onnx")
+
+    message = str(caught.value)
+    assert "onnx is not" in message
+    assert "pip install onnx" in message
+    # Naming the wrong machine is how someone ends up installing it on the board.
+    assert "not the DevKit" in message
+
+
+def test_the_preflight_names_every_missing_package_at_once(monkeypatch):
+    """Three round trips through a container install is two too many."""
+    import importlib.util
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: None)
+    assert export.missing_requirements() == ["torch", "ultralytics", "onnx"]
+
+
+def test_the_export_does_not_start_by_loading_torch(tmp_path, monkeypatch):
+    """The check has to come first to be worth having.
+
+    Importing torch is several seconds. Asked afterwards, the answer arrives
+    after exactly the wait it exists to avoid.
+    """
+    import importlib.util
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: None)
+    monkeypatch.setitem(
+        __import__("sys").modules, "torch", None,  # any use of it would raise
+    )
+    with pytest.raises(RuntimeError, match="pip install torch"):
+        export.export_onnx(tmp_path / "missing.pt", tmp_path / "out.onnx")
+# -- the one retry --
+
+#: The shape of the recipe's load_model call, enough to edit.
+RECIPE_LOAD = '''
+loaded_net = load_model(
+    ImporterParams(
+        format=ModelFormat.onnx,
+        file_paths=[str(compile_path)],
+    ),
+    target=gen2_target,
+)
+'''
+
+
+def test_a_flexible_batch_refusal_is_recognised(tmp_path):
+    """afe names the fix in the message, which is why this is matchable."""
+    log = tmp_path / "compile.log"
+    log.write_text(
+        "afe.core.flexible_batch_analysis - ERROR - Model is loaded with "
+        "flexible_batch_size=True but the following nodes do not use batch size 1: "
+        "EV_4/reshape_0.  Pass flexible_batch_size=False to load_model",
+        encoding="utf-8",
+    )
+    assert export.needs_fixed_batch(log) is True
+
+
+def test_any_other_failure_is_not_retried(tmp_path):
+    """A retry that cannot help is a second wait for the same answer."""
+    log = tmp_path / "compile.log"
+    log.write_text("ModuleNotFoundError: No module named 'onnxsim'", encoding="utf-8")
+    assert export.needs_fixed_batch(log) is False
+    assert export.needs_fixed_batch(tmp_path / "nothing.log") is False
+
+
+def test_the_batch_size_is_pinned_in_the_recipes_own_call(tmp_path):
+    """A YOLO26 head with attention reshapes across the batch axis.
+
+    `/model.10/m/m.0/attn/MatMul` and friends land on EV, and afe then refuses
+    to load the graph with the batch size left free -- which is the default,
+    and which the published detection packs were built with.
+    """
+    recipe = tmp_path / "compile_modelsdk.py"
+    recipe.write_text(RECIPE_LOAD, encoding="utf-8")
+
+    assert export.pin_batch_size(recipe) is True
+    text = recipe.read_text(encoding="utf-8")
+    assert "flexible_batch_size=False," in text
+    # Inside the call, not appended to the file.
+    assert text.index("flexible_batch_size") < text.index("\n)")
+
+
+def test_pinning_twice_is_not_an_edit(tmp_path):
+    """The retry runs once. A recipe already pinned has nothing to give."""
+    recipe = tmp_path / "compile_modelsdk.py"
+    recipe.write_text(RECIPE_LOAD, encoding="utf-8")
+    assert export.pin_batch_size(recipe) is True
+    assert export.pin_batch_size(recipe) is False
+
+
+def test_an_unrecognised_recipe_is_left_alone(tmp_path):
+    """Editing a script this does not understand is worse than not retrying.
+
+    Silence here means the compile reports afe's own refusal, which is a
+    better outcome than a mangled copy of SiMa's recipe failing differently.
+    """
+    recipe = tmp_path / "compile_modelsdk.py"
+    recipe.write_text("print('not the script we think it is')\n", encoding="utf-8")
+    assert export.pin_batch_size(recipe) is False
+    assert recipe.read_text(encoding="utf-8") == "print('not the script we think it is')\n"
+
+
+def test_a_recipe_with_two_load_calls_is_left_alone(tmp_path):
+    """Ambiguous is the same as unrecognised: do not guess which one."""
+    recipe = tmp_path / "compile_modelsdk.py"
+    recipe.write_text(RECIPE_LOAD + RECIPE_LOAD, encoding="utf-8")
+    assert export.pin_batch_size(recipe) is False
+
+
+# -- the environment the recipe runs in --
+
+def test_the_interpreters_own_bin_goes_on_the_front_of_path(tmp_path):
+    """afe shells out to `mla-masm` and finds it on PATH or not at all.
+
+    Running the recipe under another virtualenv's python without its bin buys
+    five minutes of quantization and then
+    `CRITICAL - [Errno 2] No such file or directory: 'mla-masm'` -- at the
+    last step, with nothing to show for the wait.
+    """
+    import os
+
+    venv_bin = tmp_path / "model-compiler" / "bin"
+    venv_bin.mkdir(parents=True)
+    env = export.recipe_env(str(venv_bin / "python3"))
+    assert env["PATH"].split(os.pathsep)[0] == str(venv_bin)
+    # And the rest of it is still there: the toolchain is not the only thing
+    # the recipe needs to find.
+    assert os.environ.get("PATH", "") in env["PATH"]
+
+
+def test_virtual_env_is_set_only_for_an_actual_virtualenv(tmp_path):
+    """A bare system python has no root to point at."""
+    plain = tmp_path / "usr" / "bin"
+    plain.mkdir(parents=True)
+    assert "VIRTUAL_ENV" not in export.recipe_env(str(plain / "python3"))
+
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = /x", encoding="utf-8")
+    assert export.recipe_env(str(venv / "bin" / "python3"))["VIRTUAL_ENV"] == str(venv)
+
+
+def test_the_bin_is_not_resolved_through_the_symlink(tmp_path):
+    """A venv's `python` is a symlink to the interpreter it was built from.
+
+    Resolving it lands in pyenv's bin, which has a python and none of the
+    SDK's tools -- so the one directory that had `mla-masm` is the one that
+    would be left off.
+    """
+    import os
+
+    real_bin = tmp_path / "pyenv" / "versions" / "3.10.21" / "bin"
+    real_bin.mkdir(parents=True)
+    real = real_bin / "python"
+    real.write_text("", encoding="utf-8")
+
+    venv_bin = tmp_path / "model-compiler" / "bin"
+    venv_bin.mkdir(parents=True)
+    link = venv_bin / "python3"
+    try:
+        link.symlink_to(real)
+    except (OSError, NotImplementedError):  # pragma: no cover - needs privilege
+        pytest.skip("symlinks not available here")
+
+    first = export.recipe_env(str(link))["PATH"].split(os.pathsep)[0]
+    assert first == str(venv_bin)
+    assert first != str(real_bin)
+
+
+# -- the compile narrates itself --
+
+#: Prints, pauses long enough to count as silence, prints again, writes a pack.
+#: The pause is what a real compile does for minutes at a time in quantization.
+#:
+#: It waits for the reader to prove it is reading before pausing. Without that
+#: the whole run could finish before the parent reached its read loop -- a cold
+#: Windows runner spawning a python is easily slower than the pause -- and then
+#: every queued line arrives at once and no silence is ever observed. The test
+#: failed on exactly that, on one platform, some of the time.
+CHATTY_RECIPE = '''
+import argparse
+import pathlib
+import sys
+import time
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model")
+parser.add_argument("--build-dir")
+args = parser.parse_args()
+
+print("afe: importing the ONNX graph")
+sys.stderr.write("afe WARNING: operator Resize falls back to CVU" + chr(10))
+
+reading = pathlib.Path(args.build_dir) / "reading"
+deadline = time.time() + 10
+while not reading.exists() and time.time() < deadline:
+    time.sleep(0.01)
+
+time.sleep(0.35)
+print("afe: tessellating for the MLA")
+
+out = pathlib.Path(args.build_dir) / "best_mpk.tar.gz"
+out.write_bytes(b"pack")
+'''
+
+
+def test_the_recipes_output_arrives_while_it_runs(tmp_path, monkeypatch):
+    """A compile is ten to fifteen minutes of someone else's program.
+
+    Captured, as this was, it printed nothing for all of them and then threw
+    the lot away on success -- so the only two states a user could see were
+    "no output yet" and "done", which are the same state as "hung".
+    """
+    monkeypatch.setattr(export, "SILENCE_HEARTBEAT", 0.1)
+    build = tmp_path / "build"
+    build.mkdir()
+    onnx = tmp_path / "best-raw.onnx"
+    onnx.write_bytes(b"onnx")
+
+    seen: list[str] = []
+    quiet: list[float] = []
+
+    def note(line: str) -> None:
+        # on_line runs on the reading thread, so this file appearing is proof
+        # the parent is in its read loop. The recipe waits for it before
+        # pausing, which is what makes the pause land where it can be seen.
+        seen.append(line)
+        (build / "reading").touch()
+
+    pack = export.run_recipe(
+        make_recipe(tmp_path, CHATTY_RECIPE), onnx, build,
+        on_line=note, on_silence=quiet.append,
+    )
+
+    assert pack.name == "best_mpk.tar.gz"
+    # Both streams, in the order they happened. afe writes progress to one and
+    # warnings to the other, and which step a warning belongs to is the order.
+    assert seen[0] == "afe: importing the ONNX graph"
+    assert "falls back to CVU" in seen[1]
+    assert seen[-1] == "afe: tessellating for the MLA"
+    # The pause between them was noticed rather than sat through in silence.
+    assert quiet, "a recipe that says nothing for a while must still say so"
+
+
+def test_every_line_is_kept_in_the_log(tmp_path):
+    """The terminal scrolls; a compile worth debugging is worth a file."""
+    build = tmp_path / "build"
+    build.mkdir()
+    onnx = tmp_path / "best-raw.onnx"
+    onnx.write_bytes(b"onnx")
+    # This test wants the lines, not the pause between them, so the recipe's
+    # handshake is satisfied up front and it never waits.
+    (build / "reading").touch()
+
+    export.run_recipe(make_recipe(tmp_path, CHATTY_RECIPE), onnx, build)
+
+    log = (build / export.COMPILE_LOG).read_text(encoding="utf-8")
+    assert "afe: importing the ONNX graph" in log
+    assert "falls back to CVU" in log
+    assert "afe: tessellating for the MLA" in log
+    # The command itself, so the log says what produced it.
+    assert "--build-dir" in log.splitlines()[0]
+
+
+def test_a_failing_recipe_says_where_the_rest_of_it_is(tmp_path):
+    """Six lines of tail is the summary. The answer is usually above them."""
+    build = tmp_path / "build"
+    build.mkdir()
+    with pytest.raises(RuntimeError) as caught:
+        export.run_recipe(
+            make_recipe(tmp_path, FAILING_RECIPE), tmp_path / "x.onnx", build
+        )
+
+    message = str(caught.value)
+    assert export.COMPILE_LOG in message
+    log = (build / export.COMPILE_LOG).read_text(encoding="utf-8")
+    assert "quantizing" in log and "unsupported operator Foo" in log
+
+
+#: Never returns. A compile that wedges is indistinguishable from a slow one
+#: until the limit, which is the whole reason the limit exists.
+HANGING_RECIPE = '''
+import argparse
+import time
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model")
+parser.add_argument("--build-dir")
+parser.parse_args()
+
+print("afe: importing the ONNX graph", flush=True)
+time.sleep(600)
+'''
+
+
+def test_a_compile_that_wedges_is_stopped_and_said_so(tmp_path, monkeypatch):
+    """Without this the run waits the full hour holding an open step."""
+    monkeypatch.setattr(export, "SILENCE_HEARTBEAT", 0.1)
+    build = tmp_path / "build"
+    build.mkdir()
+
+    with pytest.raises(RuntimeError, match="was stopped"):
+        export.run_recipe(
+            make_recipe(tmp_path, HANGING_RECIPE), tmp_path / "x.onnx", build,
+            timeout=1,
+        )
+    assert (build / export.COMPILE_LOG).is_file()
+# -- what the recipe imports, asked of the interpreter that will run it --
+
+def test_what_an_interpreter_is_missing_is_asked_of_that_interpreter(tmp_path):
+    """Not of this one. That is the entire point.
+
+    `pip install` in the shell you are typing into and an SDK in another
+    virtualenv is the normal shape of the container, and a check run here
+    would report the wrong machine's answer with total confidence.
+    """
+    import sys
+
+    absent = export.missing_in(sys.executable, ["sys", "json", "no_such_module_xyz"])
+    assert absent == ["no_such_module_xyz"]
+
+
+def test_an_interpreter_that_cannot_be_run_counts_as_missing_everything(tmp_path):
+    """A path that is not a python is not a python with the SDK in it."""
+    assert export.missing_in(str(tmp_path / "not-a-python"), ["afe"]) == ["afe"]
+    assert export.has_model_sdk(str(tmp_path / "not-a-python")) is False
+
+
+def test_the_recipes_own_imports_are_what_is_checked():
+    """Read off SiMa's archived script, not guessed.
+
+    It opens with numpy, onnx and onnxsim, then afe and sima_utils. Checking
+    only afe is how a compile got as far as running the recipe and died on
+    `ModuleNotFoundError: No module named 'onnxsim'` minutes later.
+    """
+    assert set(export.RECIPE_REQUIREMENTS) == {
+        "numpy", "onnx", "onnxsim", "afe", "sima_utils",
+    }
+    # The SDK is not on PyPI, so a message must not offer to install it.
+    assert "afe" not in export.INSTALLABLE_REQUIREMENTS
+    assert "sima_utils" not in export.INSTALLABLE_REQUIREMENTS
+
+
+def test_the_fix_is_aimed_at_the_interpreter_that_needs_it():
+    """`pip install onnxsim` in the wrong virtualenv looks like it worked."""
+    text = export.requirements_help(["onnxsim"], "/opt/sdk/bin/python")
+    assert "/opt/sdk/bin/python -m pip install onnxsim" in text
+    assert "not necessarily the one on your PATH" in text
+
+
+def test_a_missing_sdk_is_not_offered_as_a_pip_install():
+    """Telling someone to `pip install afe` sends them somewhere that fails."""
+    text = export.requirements_help(["onnxsim", "afe", "sima_utils"], "/opt/py")
+    assert "pip install onnxsim" in text
+    assert "pip install afe" not in text
+    assert export.MODEL_SDK_PYTHON_ENV in text, "say how to point at the right one"
+
+
+# -- which python compiles, not whether this one can --
+
+#: Records the interpreter that ran it, which is the thing under test.
+REPORTING_RECIPE = '''
+import argparse
+import pathlib
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model")
+parser.add_argument("--build-dir")
+args = parser.parse_args()
+
+build = pathlib.Path(args.build_dir)
+build.mkdir(parents=True, exist_ok=True)
+(build / "ran-under.txt").write_text(sys.executable, encoding="utf-8")
+(build / "out_mpk.tar.gz").write_bytes(b"pack")
+'''
+
+
+def test_the_recipe_runs_under_the_interpreter_it_is_given(tmp_path):
+    """The SDK has to be importable to the recipe, never to us.
+
+    `compile` runs the recipe as a subprocess, so a sima-vision installed in
+    one virtualenv can drive a Model SDK that lives in another -- which is the
+    normal shape of a Palette container, where `pip install sima-vision` and
+    `activate-model-compiler` do not have to have chosen the same one.
+    """
+    import sys
+
+    build = tmp_path / "build"
+    build.mkdir()
+    export.run_recipe(
+        make_recipe(tmp_path, REPORTING_RECIPE), tmp_path / "x.onnx", build,
+        python=sys.executable,
+    )
+    assert (build / "ran-under.txt").read_text(encoding="utf-8") == sys.executable
+    # And the log says which one, because "it compiled" and "it compiled with
+    # the python you meant" are different claims.
+    assert sys.executable in (build / export.COMPILE_LOG).read_text(encoding="utf-8")
+
+
+def test_the_activated_virtualenv_is_among_the_candidates(tmp_path, monkeypatch):
+    """`activate-model-compiler` exists to switch virtualenvs.
+
+    Not asking the one it switched to is how `no afe module here` got printed
+    at a prompt that reads `(model-compiler)`.
+    """
+    venv = tmp_path / "model-compiler"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("", encoding="utf-8")
+
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv))
+    monkeypatch.delenv(export.MODEL_SDK_PYTHON_ENV, raising=False)
+    assert any("model-compiler" in python for python in export.sdk_candidates())
+
+
+def test_an_interpreter_named_by_hand_is_tried_even_if_it_is_not_there():
+    """Dropping it silently turns an instruction into nothing happening."""
+    import os
+
+    os.environ[export.MODEL_SDK_PYTHON_ENV] = "/nowhere/bin/python"
+    try:
+        assert export.sdk_candidates()[0] == "/nowhere/bin/python"
+    finally:
+        del os.environ[export.MODEL_SDK_PYTHON_ENV]
+
+
+def test_half_the_sdk_is_not_the_sdk(monkeypatch):
+    """The one that actually happened.
+
+    /opt/neat-insight/venv/bin/python3 has `afe` and no `sima_utils`. Taking
+    the first interpreter with `afe` announced it as the Model SDK, skipped
+    every candidate behind it, and failed on the import the recipe reaches
+    second. A partial match must not end the search.
+    """
+    monkeypatch.setattr(
+        export, "sdk_candidates",
+        lambda: ["/opt/neat-insight/venv/bin/python3", "/opt/model-compiler/bin/python3"],
+    )
+    gaps = {
+        "/opt/neat-insight/venv/bin/python3": ["sima_utils"],
+        "/opt/model-compiler/bin/python3": [],
+    }
+    monkeypatch.setattr(export, "missing_recipe_requirements", lambda p: gaps[p])
+
+    assert export.choose_sdk_python() == ("/opt/model-compiler/bin/python3", [])
+
+
+def test_an_interpreter_needing_only_a_pip_install_is_still_usable(monkeypatch):
+    """It has the SDK; the rest is one command the message can name."""
+    monkeypatch.setattr(export, "sdk_candidates", lambda: ["/opt/sdk/bin/python3"])
+    monkeypatch.setattr(export, "missing_recipe_requirements", lambda p: ["onnxsim"])
+    assert export.choose_sdk_python() == ("/opt/sdk/bin/python3", ["onnxsim"])
+
+
+def test_a_complete_interpreter_beats_one_that_needs_installing(monkeypatch):
+    """Both can compile. Only one can compile now."""
+    monkeypatch.setattr(
+        export, "sdk_candidates", lambda: ["/opt/needs-pip/python3", "/opt/ready/python3"],
+    )
+    gaps = {"/opt/needs-pip/python3": ["onnxsim"], "/opt/ready/python3": []}
+    monkeypatch.setattr(export, "missing_recipe_requirements", lambda p: gaps[p])
+    assert export.choose_sdk_python()[0] == "/opt/ready/python3"
+
+
+def test_nothing_with_the_sdk_is_reported_as_nothing(monkeypatch):
+    monkeypatch.setattr(export, "sdk_candidates", lambda: ["/a/python", "/b/python"])
+    monkeypatch.setattr(export, "missing_recipe_requirements", lambda p: ["afe", "sima_utils"])
+    assert export.choose_sdk_python() == (None, [])
+    assert export.model_sdk_python() is None
+    assert export.model_sdk_present() is False
+
+
+def test_the_same_interpreter_under_two_names_is_probed_once(monkeypatch):
+    """`python`, `python3` and the venv's own are usually one file.
+
+    Probing it three times is three imports of a heavy package to learn one
+    thing, on the slow path of an already slow command.
+    """
+    import sys
+
+    monkeypatch.delenv(export.MODEL_SDK_PYTHON_ENV, raising=False)
+    monkeypatch.setenv("VIRTUAL_ENV", str(Path(sys.executable).parent.parent))
+    monkeypatch.setattr(shutil, "which", lambda name: sys.executable)
+    assert export.sdk_candidates().count(sys.executable) == 1
+
+
+def test_giving_up_says_which_interpreters_were_asked(monkeypatch):
+    """"No Model SDK here" inside a container that has one is unanswerable.
+
+    Without the list there is nothing for the reader to check: the message
+    describes a machine they can see is wrong, and names nothing they can act
+    on. With it, the mismatch is the first thing they read.
+    """
+    text = export.next_steps(
+        Path("build/best-raw.onnx"), None,
+        ["/usr/bin/python3", "/opt/model-compiler/bin/python"],
+    )
+    assert "/usr/bin/python3" in text
+    assert "/opt/model-compiler/bin/python" in text
+    assert export.MODEL_SDK_PYTHON_ENV in text, "say how to override the guess"
 
 
 def test_the_guidance_names_the_module_it_looked_for():

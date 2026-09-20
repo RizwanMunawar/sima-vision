@@ -38,9 +38,9 @@ def _build_alias_table(task_cls) -> tuple[dict[str, str], set[str]]:
     """Map Python keyword -> config path, straight off this task's CLI flags.
 
     Returns the table and the set of keywords whose boolean has to be flipped:
-    ``--send`` turns ``alerts.dry_run`` *off*, so ``send=True`` must write
-    False. ``--no-save`` is registered as ``save`` for the same reason, in the
-    other direction -- nobody wants to write ``no_save=True``.
+    ``--no-save`` is registered as ``save`` -- nobody wants to write
+    ``no_save=True`` -- and a flag whose const is False is inverted so that the
+    keyword reads the way the flag does.
     """
     from .cli import add_shared_arguments
 
@@ -70,7 +70,8 @@ def _build_alias_table(task_cls) -> tuple[dict[str, str], set[str]]:
                     f"already means {claimed!r}. Rename one of the flags."
                 )
             aliases[name] = action.dest
-            # `--send` reads as "do send", but it clears a dry_run flag.
+            # A positive flag that clears something reads backwards as a
+            # keyword, so the value is flipped on the way in.
             if turns_off and not negative:
                 inverted.add(name)
     return aliases, inverted

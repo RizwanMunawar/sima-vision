@@ -56,6 +56,19 @@ board = [
     "numpy>=1.24",
     "opencv-python>=4.7",
 ]
+# What `sima-vision compile` needs, and only it. Not a plain dependency: these
+# are hundreds of megabytes, they are for the Palette container and the PC that
+# trains the model, and the board -- where this package is normally installed --
+# has no use for any of them. onnx is listed because torch does not depend on
+# it: `torch.onnx.export` imports it at the end of the trace and fails there if
+# it is absent. numpy and onnxsim are what SiMa's own archived compile script
+# imports, alongside the SDK itself.
+compile = [
+    "ultralytics>=8.3",
+    "numpy>=1.24",
+    "onnx>=1.15",
+    "onnxsim>=0.4",
+]
 # One command gets you a working checkout: the test suite exercises the mask
 # decoding, compositing and overlay for real, so it needs numpy and OpenCV
 # even though the package itself does not. Headless, because no test opens

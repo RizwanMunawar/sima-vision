@@ -1,4 +1,4 @@
-"""Tracking, the fall state machine and the alert queue.
+"""Tracking and the fall state machine.
 
 Pure Python, no board and no OpenCV. These are the rules a safety feature turns
 on, so they are worth stating as tests rather than trusting to a clip.
@@ -8,19 +8,16 @@ from __future__ import annotations
 
 import pytest
 
+from sima_vision.tasks import fall
 from sima_vision.tasks.fall import (
     FALLEN,
     FALLING,
     RECOVERING,
     UPRIGHT,
-    Alert,
-    AlertConfig,
-    AlertSender,
     FallConfig,
     Track,
     TrackConfig,
     Tracker,
-    alert_password,
     box_iou,
     descent_rate,
     fall_signals,
@@ -210,76 +207,84 @@ def test_a_brief_crouch_never_reaches_fallen():
     assert track.state == RECOVERING
 
 
-# ── alerts ──
+# -- what a box says --
+
+def _track(state, track_id=3, class_id=0, score=0.873):
+    box = {"x1": 10.0, "y1": 10.0, "x2": 100.0, "y2": 300.0,
+           "score": score, "class_id": class_id}
+    return fall.Track(track_id=track_id, box=box, state=state)
 
 
-def test_alerts_off_queue_nothing():
-    sender = AlertSender(AlertConfig(enable=False))
-    assert sender.offer(make_alert(), 0.0) is False
+def test_a_fall_is_a_change_of_class_and_nothing_else():
+    """The whole visual difference between this app and `detect`.
+
+    A fallen track's box is relabelled; every other field stays exactly as the
+    detector reported it, so the same `draw_boxes` draws both.
+    """
+    tracks = [_track(fall.UPRIGHT, class_id=0), _track(fall.FALLEN, class_id=0)]
+    boxes, labels = fall.overlay_boxes(tracks, ["person"], [0])
+
+    assert labels[boxes[0]["class_id"]] == "person"
+    assert labels[boxes[1]["class_id"]] == fall.FALL_CLASS
+    for box, track in zip(boxes, tracks, strict=True):
+        assert box["score"] == track.box["score"]
+        assert (box["x1"], box["y1"], box["x2"], box["y2"]) == (10.0, 10.0, 100.0, 300.0)
 
 
-def make_alert():
-    return Alert(track_id=1, label="person", box=(0, 0, 10, 10),
-                 signals={}, frame_index=1)
+def test_the_state_machines_own_words_never_reach_the_frame():
+    """`upright` and `recovering` are internal vocabulary.
+
+    Someone watching a corridor reads the class name, and only ever sees FALL
+    when that person is on the floor.
+    """
+    for state in (fall.UPRIGHT, fall.FALLING, fall.RECOVERING):
+        boxes, labels = fall.overlay_boxes([_track(state)], ["person"], [0])
+        assert labels[boxes[0]["class_id"]] == "person", state
 
 
-def test_cooldown_suppresses_a_burst():
-    sender = AlertSender(AlertConfig(enable=True, dry_run=True, cooldown_seconds=60.0))
-    try:
-        assert sender.offer(make_alert(), 100.0) is True
-        assert sender.offer(make_alert(), 110.0) is False
-        assert sender.suppressed == 1
-        assert sender.offer(make_alert(), 200.0) is True
-    finally:
-        sender.close(timeout=2.0)
+def test_a_fallen_box_is_relabelled_whatever_it_was_detected_as():
+    """FALL replaces the class; it does not depend on the class being person."""
+    boxes, labels = fall.overlay_boxes(
+        [_track(fall.FALLEN, class_id=1)], ["worker", "forklift"], [1]
+    )
+    assert labels[boxes[0]["class_id"]] == fall.FALL_CLASS
 
 
-def test_a_full_queue_drops_rather_than_blocking():
-    """A stalled pipeline misses the next fall, which is worse than one lost email."""
-    cfg = AlertConfig(enable=True, dry_run=True, cooldown_seconds=0.0, queue_depth=1)
-    sender = AlertSender(cfg)
-    sender._thread = None                 # stop the worker draining, to fill the queue
-    try:
-        sender.offer(make_alert(), 0.0)
-        sender.offer(make_alert(), 1.0)
-        assert sender.dropped >= 1
-    finally:
-        sender._thread = None
+def test_fall_is_coloured_from_the_same_palette_as_everything_else():
+    """No fall-specific colour. It takes a palette entry like any class."""
+    from sima_vision.draw import CLASS_COLORS, class_color
+
+    boxes, _ = fall.overlay_boxes([_track(fall.FALLEN)], ["person"], [0])
+    assert class_color(boxes[0]["class_id"]) in CLASS_COLORS
 
 
-def test_password_comes_from_the_environment(monkeypatch):
-    cfg = AlertConfig(username="bot@x.com", password_env="TEST_SMTP_PW")
-    monkeypatch.setenv("TEST_SMTP_PW", "hunter2")
-    assert alert_password(cfg) == "hunter2"
+def test_fall_does_not_come_out_the_same_colour_as_the_class_it_replaces():
+    """80 COCO classes and four colours put FALL straight back on person's.
+
+    Which would paint a fallen person the same colour as the one standing next
+    to them -- the one case the colour has to distinguish.
+    """
+    from sima_vision.draw import class_color
+
+    labels = [f"class{i}" for i in range(80)]
+    boxes, _ = fall.overlay_boxes([_track(fall.FALLEN, class_id=0)], labels, [0])
+    assert class_color(boxes[0]["class_id"]) != class_color(0)
 
 
-def test_a_missing_password_is_an_error_not_a_silent_failure(monkeypatch):
-    cfg = AlertConfig(username="bot@x.com", password_env="TEST_SMTP_PW")
-    monkeypatch.delenv("TEST_SMTP_PW", raising=False)
-    with pytest.raises(RuntimeError, match="TEST_SMTP_PW"):
-        alert_password(cfg)
+def test_fall_avoids_every_tracked_class_colour_it_can():
+    """Not just the first one: any class that can fall is a class to avoid."""
+    from sima_vision.draw import class_color
+
+    labels = [f"class{i}" for i in range(80)]
+    tracked = [0, 1, 2]
+    boxes, _ = fall.overlay_boxes([_track(fall.FALLEN, class_id=0)], labels, tracked)
+    used = {class_color(i) for i in tracked}
+    assert class_color(boxes[0]["class_id"]) not in used
 
 
-def test_no_username_needs_no_password():
-    assert alert_password(AlertConfig(username="")) == ""
+def test_the_fall_app_draws_with_the_detect_settings():
+    """The same object, not a copy of the numbers, so they cannot drift."""
+    from sima_vision.tasks.detect import DETECT_DRAW
+    from sima_vision.tasks.fall import FallTask
 
-
-def test_the_message_carries_the_signals_that_fired():
-    cfg = AlertConfig(enable=True, dry_run=True, sender="a@x.com",
-                      recipients=("b@x.com",), site="Aisle 4")
-    sender = AlertSender(cfg)
-    try:
-        alert = Alert(
-            track_id=7, label="person", box=(10, 20, 110, 60),
-            signals={"aspect": True, "aspect_value": 1.9, "collapse": False,
-                     "descent": True, "descent_value": 812.5},
-            frame_index=42,
-        )
-        msg = sender.build_message(alert)
-        assert "Aisle 4" in msg["Subject"]
-        assert "#7" in msg["Subject"]
-        body = msg.get_content()
-        assert "track     : #7 (person)" in body
-        assert "1.9" in body and "812.5" in body
-    finally:
-        sender.close(timeout=2.0)
+    assert FallTask.defaults.draw is DETECT_DRAW

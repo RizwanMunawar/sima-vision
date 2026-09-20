@@ -1,21 +1,20 @@
 <div align="center">
 
-<img src="assets/sima-devkit-docs-logo-home.jpg" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0">
+<img src="assets/sima-devkit-docs-logo-home.png" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0">
+</div>
+
+<div align="center">
+<br>
 
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-FF8C00)](https://docs.sima.ai)
-[![Neat](https://img.shields.io/badge/Neat-0.4.0-800080)](https://docs.sima.ai)
+[![Neat](https://img.shields.io/badge/Neat-0.3.0%20%7C%200.4.0-165432)](https://docs.sima.ai)
 
 [![CI](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
 [![Python](https://img.shields.io/badge/python-3.10+-3776AB&logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-6C757D)](LICENSE)
 [![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703&labelColor=333)](https://github.com/ultralytics/ultralytics)
-
-[![Fall detection](https://img.shields.io/badge/Fall-detection-111F68)](https://github.com/ultralytics/ultralytics)
-[![Segmentation and blur](https://img.shields.io/badge/Segmentation-blur-FF64DA)](https://github.com/ultralytics/ultralytics)
-[![Object detection](https://img.shields.io/badge/Object-detection-042AFF)](https://github.com/ultralytics/ultralytics)
-
 </div>
 
 **Computer vision applications on the SiMa.ai Modalix DevKit 3.0.** Object detection,
@@ -31,15 +30,23 @@ or later.
 
 ## Quickstart
 
-![on the DevKit](https://img.shields.io/badge/run_on-DevKit-E63946?style=flat-square)
+![on the DevKit](https://img.shields.io/badge/run_on-DevKit-111f68)
 
-No Docker, no WSL, no login. Every command here is typed on the board.
+Every command here is typed on the board.
 
 ```bash
-sima-cli login
-sima-cli neat install core@v0.4.0    # once per board
+pip install sima-cli
 
+# Login via SiMa.ai Portal
+sima-cli login
+
+# Install Neat core, once
+sima-cli neat install core@v0.3.0
+
+# Install sima-vision
 pip install sima-vision
+
+# Run object detection
 sima-vision detect
 ```
 
@@ -49,35 +56,41 @@ them needs no login and no `sima-cli`.
 
 | App | Fetched for you | Writes |
 |:--|:--|:--|
-| `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
-| `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4`, `frames/` |
-| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
+| `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4` |
+| `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4` |
+| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4` |
+
+The annotated video is the only thing written. Stills are off unless you ask for them
+with `--save`.
 
 <details>
-<summary>🎨 &nbsp;<b>Instance segmentation</b> &nbsp;·&nbsp; per-pixel masks, with an optional blur</summary>
+<summary>&nbsp;<b>Instance segmentation</b> &nbsp;·&nbsp; per-pixel masks, with the background blurred</summary>
 
 <br>
 
 ```bash
-sima-vision segment
-sima-vision segment --blur
-sima-vision segment --blur --keep-classes person
+sima-vision segment                        # background blurred, instances sharp
+sima-vision segment --keep-classes person  # only people stay sharp
+sima-vision segment --anonymise            # the other way round: blur the people
+sima-vision segment --no-blur              # a plain overlay, nothing blurred
 ```
 
 </details>
 
 <details>
-<summary>🚨 &nbsp;<b>Fall detection</b> &nbsp;·&nbsp; tracks people, with optional email alerts</summary>
+<summary>&nbsp;<b>Fall detection</b> &nbsp;·&nbsp; tracks people and relabels the box when one goes down</summary>
 
 <br>
 
 ```bash
 sima-vision fall
-sima-vision fall --alert-to ops@example.com
+sima-vision fall --classes person --confirm 2.0
 ```
 
-Nothing is emailed until you pass `--send`. Without it a fall is composed and logged, so
-you can see what would have gone out.
+The frame is the one `detect` draws: same palette, same boxes, same captions. A confirmed
+fall changes one thing, the class the box is labelled with, so a person reading `person
+0.93` a second earlier now reads `FALL 0.93`. Each fall is also printed on the console and
+counted in the run summary.
 
 </details>
 
@@ -105,12 +118,16 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--no-video` | all | Do not record |
 | `--video-encoder` | all | `sima` (hardware H.264, default) or `opencv` (software, about ten times slower) |
 | `--video-bitrate KBPS` | all | Target bitrate for the hardware encoder. Default `12000` |
-| `--save-dir DIR` | all | Where annotated stills are written |
-| `--save-every N` | all | Write every Nth still. Default `10`; `0` disables |
-| `--no-save` | all | Do not write stills |
+| `--save` | all | Also write annotated stills. Off by default, so only the video is written |
+| `--save-dir DIR` | all | Where annotated stills are written. Implies `--save` |
+| `--save-every N` | all | Write every Nth still. Default `10` once stills are on; implies `--save`. `0` disables |
+| `--no-save` | all | Do not write stills. Already the default; use it to override a config file |
 | `--no-hud` | all | Leave the frame-rate badge off the overlay |
-| `--insight` | all | Stream to Neat Insight over UDP. Off by default |
-| `--insight-host HOST` | all | Insight address as the board sees it. Default `127.0.0.1` |
+| `--hud-scale N` | all | Frame-rate badge font size. Default `2.4`, which is 1.5x the caption scale; `0` follows the caption scale exactly |
+| `--hud-thickness N` | all | Badge stroke weight. Default `6`, which is 1.5x the caption thickness; `0` follows it exactly |
+| `--hud-bg B,G,R` | all | Badge fill colour. Default `132,28,193` (`#C11C84`) |
+| `--hud-color B,G,R` | all | Badge text colour. Default `255,255,255` |
+| `--hud-padding PX` | all | Gap between badge text and its edge, which is what sizes the badge. Default `22`; `0` follows the caption padding |
 | `--config`, `-c PATH` | all | Config file. Defaults to `./config.yaml` |
 | `--no-config` | all | Ignore any config file and use defaults plus these flags |
 | `--validate` | all | Resolve and check the settings, then stop. Needs no board |
@@ -123,7 +140,7 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--decoder-buffers N` | all | Buffers to ask the decoder for. Default `0`, sized from the stream's reference frames |
 | `--decoder-tuning` | all | Hardware decoder preset. Default `default`, which keeps every frame; `auto` drops frames in bursts |
 | `--segment-frames N` | all | Frames per piece when a clip is too long for one decode. Default `150`; `0` runs it whole |
-| `--blur` / `--no-blur` | `segment` | Blur the background and keep instances sharp, or draw a plain overlay |
+| `--blur` / `--no-blur` | `segment` | Blur the background and keep instances sharp. On by default; `--no-blur` draws a plain overlay |
 | `--blur-method` | `segment` | `gaussian`, `pixelate` or `none`. Default `gaussian` |
 | `--blur-strength PX` | `segment` | Gaussian kernel width at 1080p. Default `41` |
 | `--keep-classes CLASS...` | `segment` | Names or ids that stay sharp. Default: every detected class |
@@ -134,22 +151,13 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--classes CLASS...` | `fall` | Classes that can fall. Default `person` |
 | `--confirm S` | `fall` | How long a fall signal must hold before it counts. Default `1.5` |
 | `--no-fall` | `fall` | Track without judging falls, which is how you tune tracking first |
-| `--alert-to EMAIL...` | `fall` | Recipients. Implies `--alerts` |
-| `--alert-from EMAIL` | `fall` | From address |
-| `--alerts` | `fall` | Enable alerts. Still a dry run until `--send` |
-| `--send` | `fall` | Actually connect to the SMTP server |
-| `--smtp-host HOST` | `fall` | SMTP server. Default `smtp.gmail.com` |
-| `--smtp-port PORT` | `fall` | `587` for STARTTLS, `465` for SSL. Default `587` |
-| `--smtp-user USER` | `fall` | SMTP login. The password comes from `$FALL_ALERT_SMTP_PASSWORD` and nowhere else |
-| `--site NAME` | `fall` | Camera name, used in the alert subject and body |
-| `--test-alert` | `fall` | Send one fake alert and exit. Proves the SMTP settings without a fall, or a board |
 
 A `config.yaml` in the working directory is picked up on its own. Flags beat it, and it
 beats the built-in defaults.
 
 ## Your own model
 
-![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
+![on your PC](https://img.shields.io/badge/run_on-Host_PC-64239E)
 
 A trained `.pt` has to be compiled into a `.tar.gz` pack before the board can run it. The
 compiler is the `afe` package and exists only inside the Palette Model SDK container,
@@ -158,7 +166,7 @@ needs a [community.sima.ai](https://community.sima.ai) account and ~10 GB of dis
 takes about 30 minutes the first time. [Quickstart](#quickstart) needs none of it.
 
 <details>
-<summary>🧠 &nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b></summary>
+<summary>&nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b></summary>
 
 <br>
 
@@ -187,7 +195,7 @@ sima-cli sdk setup --workspace .      # . is what gets mounted. 15-20 minutes
 activate-model-compiler
 
 # --- Model SDK shell ---------------------------------------------------------
-pip install sima-vision ultralytics
+pip install "sima-vision[compile]"    # ultralytics, onnx, onnxsim
 sima-vision compile best.pt           # ONNX, bfloat16, tessellate, ELF. 10-15 minutes
                                       # -> build/best_mpk.tar.gz
 
@@ -201,7 +209,7 @@ sima-vision detect --model https://example.com/my-model.tar.gz   # a URL works t
 
 ## Moving files
 
-![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
+![on your PC](https://img.shields.io/badge/run_on-Host_PC-64239E)
 
 Output lands beside the run, on the board, and both commands are typed on your PC. Name the board once and neither command needs
 `--host`:
@@ -227,7 +235,6 @@ sima-vision push my-clip.h264
 | `SIMA_VISION_AUTO_INSTALL` | `0` to look but never install |
 | `SIMA_VISION_QUIET` | Non-empty is `--quiet` for every command |
 | `SIMA_VISION_COLOR` | `0` or `1` to force colour off or on. `NO_COLOR` also works |
-| `FALL_ALERT_SMTP_PASSWORD` | The only place the SMTP password is ever read from |
 
 ## Contributing
 

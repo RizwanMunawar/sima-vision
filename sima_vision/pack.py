@@ -162,6 +162,58 @@ def missing_files(pack: Path) -> list[str]:
     return [name for name in PIPELINE_FILES if name not in have]
 
 
+#: The stage the board's preprocess planner routes through. A pipeline without
+#: one is a pipeline it cannot plan, whatever else the pack contains.
+PREPROC_KERNEL = "preproc"
+
+
+def pipeline_stages(tar: tarfile.TarFile) -> list[dict]:
+    """Every stage of the pack's own pipeline, flattened. Empty if unreadable."""
+    try:
+        handle = tar.extractfile(PIPELINE)
+    except KeyError:
+        return []
+    if handle is None:
+        return []
+    try:
+        body = json.loads(handle.read().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return []
+    return [
+        stage
+        for pipeline in body.get("pipelines", [])
+        for stage in pipeline.get("sequence", [])
+    ]
+
+
+def unusable_pipeline(pack: Path) -> bool:
+    """Whether the pack's own pipeline is one the board cannot route.
+
+    ``missing_files`` asks whether the file is *there*. This asks whether what
+    is there is the right shape, which stopped being the same question: the
+    SDK did not write ``pipeline_sequence.json`` at all when this module was
+    written, so any pack that had one had it copied from a published pack.
+    Model SDK 2.1.3 writes its own, and for a graph it has decided needs no
+    preprocessing it writes one with ``use_preproc: false`` and no ``preproc``
+    stage -- ``[(MLA, mla), (CVU, detessellate)]`` where a published pack has
+    ``[(CVU, preproc), (MLA, mla)]``.
+
+    The board then fails exactly as it does for a pack with no pipeline at
+    all::
+
+        preprocess planner: MPK contract is missing an MLA stage for pre
+        route selection.
+
+    which is the same symptom from the opposite cause, and the reason this is
+    asked separately rather than folded into "is the file present".
+    """
+    with tarfile.open(pack) as tar:
+        stages = pipeline_stages(tar)
+    if not stages:
+        return False
+    return not any(stage.get("kernel") == PREPROC_KERNEL for stage in stages)
+
+
 def complete_pack(pack: Path, reference: Path) -> list[str]:
     """Add the pipeline files a pack is missing, taken from ``reference``.
 
@@ -178,6 +230,10 @@ def complete_pack(pack: Path, reference: Path) -> list[str]:
             reference carries no pipeline files to copy.
     """
     missing = missing_files(pack)
+    # A pipeline of the wrong shape is replaced like a missing one. See
+    # `unusable_pipeline` for why those became different questions.
+    if PIPELINE not in missing and unusable_pipeline(pack):
+        missing.append(PIPELINE)
     if not missing:
         return []
 
@@ -213,12 +269,23 @@ def complete_pack(pack: Path, reference: Path) -> list[str]:
 
 
 def add_to_pack(pack: Path, files: dict[str, bytes]) -> None:
-    """Rewrite a ``.tar.gz`` with extra members. gzip cannot be appended to."""
+    """Rewrite a ``.tar.gz`` with these members added or replaced.
+
+    gzip cannot be appended to, so the archive is rebuilt either way.
+
+    A member being written is dropped from the copy first. tar is happy to hold
+    two entries under one name and most readers take the last, but "most" is
+    not a contract to hand the board: a pack repaired this way carried two
+    `pipeline_sequence.json` members, one routable and one not, and which one
+    won was left to whichever extractor opened it.
+    """
     import io
 
     temp = pack.parent / (pack.name + ".tmp")
     with tarfile.open(pack) as old, tarfile.open(temp, "w:gz") as new:
         for member in old.getmembers():
+            if member.name in files:
+                continue
             handle = old.extractfile(member) if member.isfile() else None
             new.addfile(member, handle)
         for name, body in files.items():

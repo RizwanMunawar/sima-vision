@@ -15,8 +15,8 @@ from sima_vision.config import DrawConfig
 from sima_vision.draw import (
     caption_text,
     class_color,
-    draw_banner,
     draw_boxes,
+    draw_caption,
     draw_fps,
     draw_scale,
     text_ink_extent,
@@ -396,21 +396,34 @@ def fill_pixels(img, colour) -> int:
     return int((corner == np.array(colour, np.uint8)).all(axis=2).sum())
 
 
-def test_the_badge_is_purple_and_larger_than_a_caption():
+def test_the_badge_is_magenta_and_larger_than_a_caption():
     """Both are deliberate, so both are pinned.
 
     The badge is glanced at while the video plays rather than read, so it is
-    set a little above the caption scale. Purple because a black block reads as
-    part of the footage -- as a blown-out shadow or a letterbox bar -- while a
-    colour that does not occur in the scene reads as an overlay.
+    set above the caption scale. #C11C84 occurs in almost no real scene, which
+    is what makes it read as an overlay rather than as part of the footage.
     """
     draw = DrawConfig()
-    assert draw.hud_bg_color == (128, 0, 128)
+    assert draw.hud_bg_color == (132, 28, 193)     # #C11C84 as BGR
+    assert draw.hud_text_color == (255, 255, 255)
     assert draw.hud_text_scale > draw.text_scale
 
     img = np.full((1080, 1920, 3), 40, np.uint8)
     draw_fps(img, 24.0, draw)
-    assert fill_pixels(img, (128, 0, 128)) > 1000, "no purple badge was painted"
+    assert fill_pixels(img, (132, 28, 193)) > 1000, "no badge was painted"
+
+
+def test_white_stays_readable_on_the_badge():
+    """5.6:1. Large text needs 4.5:1, and the badge is deliberately large.
+
+    Worth pinning rather than leaving to taste: the badge is the one thing on
+    the frame that is not about the picture, so a fill that swallows its own
+    text makes it decoration.
+    """
+    draw = DrawConfig()
+    b, g, r = (c / 255 for c in draw.hud_bg_color)
+    lum = 0.2126 * r ** 2.2 + 0.7152 * g ** 2.2 + 0.0722 * b ** 2.2
+    assert 1.05 / (lum + 0.05) > 4.5
 
 
 def test_the_badge_still_follows_the_caption_scale_when_asked_to():
@@ -421,14 +434,6 @@ def test_the_badge_still_follows_the_caption_scale_when_asked_to():
     assert fill_pixels(img, (7, 8, 9)) > 1000
 
 
-def test_draw_banner_covers_the_bottom_strip():
-    img = frame()
-    before = img.copy()
-    draw_banner(img, "FALL DETECTED - track #1", DrawConfig())
-    assert np.array_equal(img[0:100], before[0:100])       # top untouched
-    assert not np.array_equal(img[-30:], before[-30:])     # bottom strip painted
-
-
 @pytest.mark.parametrize("size", [(120, 160), (1080, 1920)])
 def test_overlay_survives_any_frame_size(size):
     img = np.full((*size, 3), 40, np.uint8)
@@ -437,3 +442,479 @@ def test_overlay_survives_any_frame_size(size):
     draw_boxes(img, boxes, ["a", "b", "c"], DrawConfig())
     draw_fps(img, 30.0, DrawConfig())
     assert img.shape == (*size, 3)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The badge is the last thing drawn
+# ─────────────────────────────────────────────────────────────────────────────
+
+BADGE_FPS = 24.0
+
+
+def render_case(app: str):
+    """One app's runtime, config, pipeline stub and results, ready to render.
+
+    Every box sits in the top-left corner, over the badge, because that is the
+    one position where the drawing order shows.
+    """
+    import types
+
+    from sima_vision.tasks import TASKS
+
+    cfg = TASKS[app]().load(
+        None, {"model.path": "m.tar.gz", "source.uri": "c.h264"}, use_file=False
+    )
+    pipeline = types.SimpleNamespace(labels=["person", "bike", "car"],
+                                     fall_class_ids=None)
+    box = {"x1": 0.0, "y1": 0.0, "x2": 420.0, "y2": 300.0,
+           "score": 0.93, "class_id": 0}
+
+    if app == "detect":
+        from sima_vision.tasks.detect import DetectRuntime
+
+        return DetectRuntime(), cfg, pipeline, [box]
+    if app == "segment":
+        from sima_vision.tasks.segment import SegmentRuntime
+
+        instance = Instance(
+            box=box, x1=0, y1=0, x2=420, y2=300,
+            mask=np.ones((300, 420), dtype=bool), keep=True,
+        )
+        return SegmentRuntime(), cfg, pipeline, [instance]
+    from sima_vision.tasks.fall import FALLEN, FallRuntime, Track
+
+    # FALLEN, so the box is the relabelled one.
+    return FallRuntime(), cfg, pipeline, [Track(track_id=1, box=box, state=FALLEN)]
+
+
+@pytest.mark.parametrize("app", ["detect", "segment", "fall"])
+def test_the_fps_badge_is_never_drawn_over(app):
+    """Rendering with the HUD on must equal rendering without it, then stamping
+    the badge on by hand.
+
+    Which is only true if the badge is the very last thing the app draws. Every
+    app used to draw it first, so a detection in the top-left corner put its
+    caption straight through the frame rate -- and the badge is the one reading
+    on the frame that is not about the picture.
+
+    Asserted per app rather than by reading the source, because three separate
+    render methods is three chances to put it back.
+    """
+    import dataclasses
+
+    runtime, cfg, pipeline, results = render_case(app)
+    frame = np.full((1080, 1920, 3), 40, np.uint8)
+
+    with_hud = runtime.render(cfg, pipeline, frame, results, BADGE_FPS)
+
+    without_hud = runtime.render(
+        dataclasses.replace(cfg, video_hud=False), pipeline, frame, results, BADGE_FPS
+    )
+    draw_fps(without_hud, BADGE_FPS, cfg.draw)
+
+    assert np.array_equal(with_hud, without_hud), (
+        f"{app} draws something over the FPS badge"
+    )
+
+
+@pytest.mark.parametrize("app", ["detect", "segment", "fall"])
+def test_every_pixel_of_the_badge_survives_a_box_on_top_of_it(app):
+    """The same thing said in pixels, so a failure names what was lost.
+
+    A caption over the badge changed a few hundred pixels out of forty
+    thousand, which is easy to miss in a screenshot and easy to assert on.
+    """
+    runtime, cfg, pipeline, results = render_case(app)
+    frame = np.full((1080, 1920, 3), 40, np.uint8)
+
+    badge = frame.copy()
+    draw_fps(badge, BADGE_FPS, cfg.draw)
+    painted = (badge != frame).any(axis=2)
+    assert painted.sum() > 1000, "no badge to test against"
+
+    rendered = runtime.render(cfg, pipeline, frame, results, BADGE_FPS)
+    lost = int((rendered[painted] != badge[painted]).any(axis=1).sum())
+    assert lost == 0, f"{app} overwrote {lost} of {int(painted.sum())} badge pixels"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Text sized for the resolution
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_captions_are_sized_for_1080p():
+    """The numbers are the point, so they are written down.
+
+    1.0 and 2 were sized for reading a still at 100%. Played in a window, or on
+    a wall of camera tiles, a two-pixel stroke does not separate from the
+    footage behind it.
+    """
+    draw = DrawConfig()
+    assert (draw.text_scale, draw.text_thickness) == (1.6, 4)
+    assert draw.reference_height == 1080.0
+    assert draw.auto_scale is True
+
+
+def test_the_badge_is_one_and_a_half_times_a_caption():
+    """Asserted as a ratio, not as 2.4 and 6.
+
+    The badge is derived from the caption precisely so that retuning the
+    caption cannot leave the badge behind. A test against the literals would
+    pass while that relationship quietly broke.
+    """
+    from sima_vision.config import HUD_MULTIPLE, TEXT_SCALE, TEXT_THICKNESS
+
+    draw = DrawConfig()
+    assert HUD_MULTIPLE == 1.5
+    assert draw.hud_text_scale == round(TEXT_SCALE * HUD_MULTIPLE, 3) == 2.4
+    assert draw.hud_text_thickness == round(TEXT_THICKNESS * HUD_MULTIPLE) == 6
+    assert draw.hud_text_scale / draw.text_scale == pytest.approx(HUD_MULTIPLE)
+    assert draw.hud_text_thickness / draw.text_thickness == pytest.approx(HUD_MULTIPLE)
+
+
+@pytest.mark.parametrize(
+    ("size", "multiplier"),
+    [
+        ((480, 640), pytest.approx(4 / 9, abs=0.01)),
+        ((720, 1280), pytest.approx(2 / 3, abs=0.01)),
+        ((1080, 1920), 1.0),
+        ((1440, 2560), pytest.approx(4 / 3, abs=0.01)),
+        ((2160, 3840), 2.0),
+    ],
+)
+def test_text_grows_with_the_resolution(size, multiplier):
+    """1080p is 1.0 by definition; everything else follows the short side."""
+    assert draw_scale(np.zeros((*size, 3), np.uint8), DrawConfig()) == multiplier
+
+
+def caption_ink_height(frame_h: int, frame_w: int) -> int:
+    """How tall the caption's ink actually is on a frame of this size."""
+    draw = DrawConfig()
+    scale = draw_scale(np.zeros((frame_h, frame_w, 3), np.uint8), draw)
+    above, below = text_ink_extent(
+        "person 0.90",
+        draw.text_scale * scale,
+        max(1, int(round(draw.text_thickness * scale))),
+    )
+    return above + below
+
+
+def test_a_4k_caption_is_twice_the_height_of_a_1080p_one():
+    """The whole point of scaling by resolution, measured on real glyphs.
+
+    Not a restatement of `draw_scale`: this goes through the font metrics, which
+    is where a scale that is computed and then dropped on the floor would show.
+    """
+    hd = caption_ink_height(1080, 1920)
+    uhd = caption_ink_height(2160, 3840)
+    assert hd > 20, "a 1080p caption should be substantial"
+    assert uhd == pytest.approx(hd * 2, rel=0.08)
+
+
+def test_a_1080p_caption_is_visibly_bigger_than_the_old_default():
+    """The change is worth having, so its size is asserted rather than assumed."""
+    draw = DrawConfig()
+    old = text_ink_extent("person 0.90", 1.0, 2)
+    new = text_ink_extent("person 0.90", draw.text_scale, draw.text_thickness)
+    assert sum(new) > sum(old) * 1.4
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The badge's own box
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def badge_box(draw, fps: float = 28.0, size=(1080, 1920)):
+    """The painted badge's bounding box as ``(left, top, width, height)``."""
+    img = np.full((*size, 3), 40, np.uint8)
+    draw_fps(img, fps, draw)
+    filled = (img == np.array(draw.hud_bg_color, np.uint8)).all(axis=2)
+    rows, cols = np.where(filled)
+    assert rows.size, "no badge was painted"
+    return (int(cols.min()), int(rows.min()),
+            int(cols.max() - cols.min() + 1), int(rows.max() - rows.min() + 1))
+
+
+def test_the_badge_sits_off_the_corner_by_its_margin():
+    """Margin is its own number now.
+
+    It used to fall through to the padding, so the one value both sized the
+    badge and placed it: tightening the box also shoved it into the corner.
+    """
+    from sima_vision.config import HUD_MARGIN
+
+    draw = DrawConfig()
+    assert draw.hud_margin_x == draw.hud_margin_y == HUD_MARGIN == 28
+    left, top, _, _ = badge_box(draw)
+    assert (left, top) == (HUD_MARGIN, HUD_MARGIN)
+
+
+def test_the_padding_is_what_sizes_the_badge_around_its_text():
+    """260x51 of text in a 280x71 box read as a fill left on by accident."""
+    import cv2
+
+    import sima_vision.runtime as rt
+    from sima_vision.config import HUD_PADDING
+
+    draw = DrawConfig()
+    assert draw.hud_padding == HUD_PADDING == 22
+    (text_w, _), _ = cv2.getTextSize(
+        "FPS: 28", rt.FONT, draw.hud_text_scale, draw.hud_text_thickness
+    )
+    above, below = text_ink_extent("FPS: 28", draw.hud_text_scale, draw.hud_text_thickness)
+
+    # cv2.rectangle paints both endpoints, so the filled span is one pixel
+    # wider than the box it was asked for.
+    _, _, width, height = badge_box(draw)
+    assert width - 1 == text_w + HUD_PADDING * 2
+    assert height - 1 == above + below + HUD_PADDING * 2
+
+
+def test_padding_and_margin_scale_with_the_frame():
+    """Both are 1080p numbers, like everything else in DrawConfig."""
+    draw = DrawConfig()
+    left_hd, top_hd, w_hd, h_hd = badge_box(draw, size=(1080, 1920))
+    left_4k, top_4k, w_4k, h_4k = badge_box(draw, size=(2160, 3840))
+    assert (left_4k, top_4k) == (left_hd * 2, top_hd * 2)
+    assert w_4k == pytest.approx(w_hd * 2, rel=0.03)
+    assert h_4k == pytest.approx(h_hd * 2, rel=0.03)
+
+
+def test_zero_still_means_follow_the_caption():
+    """The escape hatch survives the defaults moving off 0."""
+    draw = DrawConfig(hud_padding=0, hud_margin_x=0, hud_margin_y=0)
+    left, top, _, _ = badge_box(draw)
+    # With no margin of its own, the badge falls back to its resolved padding,
+    # which with hud_padding at 0 is the caption's.
+    assert (left, top) == (draw.text_padding, draw.text_padding)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The class palette
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The palette as it was specified, in the order it was given.
+PALETTE_HEX = ["F28C28", "05299E", "46237A", "080708"]
+
+
+def bgr_of(hex_rgb: str) -> tuple[int, int, int]:
+    r, g, b = (int(hex_rgb[i:i + 2], 16) for i in (0, 2, 4))
+    return (b, g, r)
+
+
+def test_the_class_palette_is_the_one_that_was_specified():
+    """Written out in hex here, because that is how it will be checked again.
+
+    A BGR tuple in a test is unreadable next to a design; the conversion is the
+    part worth asserting, since reversing it silently swaps every box colour.
+    """
+    from sima_vision.draw import CLASS_COLORS
+
+    assert CLASS_COLORS == [bgr_of(h) for h in PALETTE_HEX]
+    assert len(set(CLASS_COLORS)) == len(CLASS_COLORS), "a repeat makes two classes look alike"
+
+
+def test_class_colours_cycle_and_are_stable():
+    from sima_vision.draw import CLASS_COLORS, class_color
+
+    assert class_color(0) == bgr_of("F28C28")
+    assert class_color(1) == bgr_of("05299E")
+    assert class_color(len(CLASS_COLORS)) == class_color(0)
+    assert class_color(79) == CLASS_COLORS[79 % len(CLASS_COLORS)]
+
+
+def test_every_class_colour_gets_a_readable_caption():
+    """The palette is mixed, so the ink is picked per band rather than fixed.
+
+    Checked as a contrast ratio rather than by eye, because a colour added
+    later will not be looked at as carefully as these four were.
+    """
+    from sima_vision.draw import (
+        CLASS_COLORS,
+        MIN_CONTRAST,
+        contrast_ratio,
+        readable_text_color,
+    )
+
+    preferred = DrawConfig().text_color
+    assert preferred == (255, 255, 255)
+    for color in CLASS_COLORS:
+        ink = readable_text_color(color, preferred)
+        ratio = contrast_ratio(color, ink)
+        assert ratio >= MIN_CONTRAST, f"{ink} on {color} is only {ratio:.1f}:1"
+
+
+def test_the_ink_only_moves_where_white_would_fail():
+    """The override is a repair, not a restyle.
+
+    White on #F28C28 is 2.5:1 -- text you can see is there and cannot read --
+    and black on it is 8.6:1. Every other band keeps the white it already had;
+    a caption turning black over a colour that was never a problem would be a
+    worse surprise than the one this fixes.
+    """
+    from sima_vision.draw import BLACK, WHITE, contrast_ratio, readable_text_color
+
+    assert contrast_ratio(class_color(0), WHITE) < 3.0
+    assert readable_text_color(class_color(0), WHITE) == BLACK
+    for class_id in (1, 2, 3):
+        assert readable_text_color(class_color(class_id), WHITE) == WHITE
+
+
+def test_a_configured_text_colour_is_honoured_while_it_is_readable():
+    """`text_color` is a setting, not a suggestion -- until it is unreadable."""
+    from sima_vision.draw import BLACK, readable_text_color
+
+    amber = (0, 194, 255)
+    # Dark bands take the configured amber, which clears the bar on them.
+    assert readable_text_color((8, 7, 8), amber) == amber
+    # The dark yellow does not, so it is overridden rather than left illegible.
+    assert readable_text_color((11, 134, 184), amber) == BLACK
+
+
+def test_the_threshold_is_the_large_text_one():
+    """4.5 is for body text. These captions are 1.6 scale with 4px strokes."""
+    from sima_vision.draw import MIN_CONTRAST
+
+    assert MIN_CONTRAST == 3.0
+
+
+def test_boxes_and_masks_share_one_palette():
+    """detect draws boxes and segment draws masks, both off `class_color`.
+
+    Two lookups that happened to agree would drift; this pins that they are the
+    same function.
+    """
+    from sima_vision.draw import class_color as boxes_use
+    from sima_vision.tasks.segment import class_color as masks_use
+
+    assert boxes_use is masks_use
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Captions stay inside their own box
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def band_width(frame, color, above_row: int) -> int:
+    """Widest run of the band's fill colour in the rows above ``above_row``.
+
+    Restricted to those rows on purpose: the box outline is the same colour,
+    and its top and bottom edges are as wide as the box, so measuring the whole
+    frame measures the box rather than the caption.
+    """
+    region = frame[: max(0, above_row - 2)]
+    filled = (region == np.array(color, np.uint8)).all(axis=2)
+    return int(filled.sum(axis=1).max()) if filled.size else 0
+
+
+def one_box(x1, y1, x2, y2, class_id=0, score=0.93):
+    return {"x1": float(x1), "y1": float(y1), "x2": float(x2), "y2": float(y2),
+            "score": score, "class_id": class_id}
+
+
+def test_every_caption_is_the_same_size_whatever_it_labels():
+    """One label size per frame, full stop.
+
+    A caption that shrank to fit its box made the same class look like two
+    different things across one frame, and gave the smallest detections the
+    smallest text -- which is backwards, since those are the ones worth reading
+    carefully. The size comes from `text_scale` and the frame, never from the
+    box.
+    """
+    widths = []
+    for box_w in (30, 120, 190, 400, 900):
+        frame = np.full((1080, 1920, 3), 40, np.uint8)
+        draw_boxes(frame, [one_box(400, 400, 400 + box_w, 900)], ["person"], DrawConfig())
+        widths.append(band_width(frame, class_color(0), 400))
+    assert len(set(widths)) == 1, f"caption size varied with the box: {widths}"
+
+
+def test_the_caption_size_is_the_configured_one():
+    """And that one size is the setting, not something derived behind its back."""
+    frame = np.full((1080, 1920, 3), 40, np.uint8)
+    draw_boxes(frame, [one_box(400, 400, 500, 900)], ["person"], DrawConfig())
+
+    reference = np.full((1080, 1920, 3), 40, np.uint8)
+    draw_caption(reference, "person 0.93", (400, 400), class_color(0), DrawConfig(), 1.0)
+
+    assert band_width(frame, class_color(0), 400) == band_width(
+        reference, class_color(0), 400
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The background blur never reaches the overlay
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def segment_render(blur: bool):
+    """One segment frame, rendered with the blur on or off."""
+    import types
+    from dataclasses import replace
+
+    from sima_vision.tasks import TASKS
+    from sima_vision.tasks.segment import SegmentRuntime
+
+    cfg = TASKS["segment"]().load(
+        None, {"model.path": "m", "source.uri": "c"}, use_file=False
+    )
+    cfg = replace(cfg, blur=replace(cfg.blur, enable=blur))
+
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    for y in range(0, 1080, 24):                     # fine checks: blur is obvious
+        for x in range(0, 1920, 24):
+            frame[y:y + 24, x:x + 24] = (
+                (210, 205, 195) if (x // 24 + y // 24) % 2 else (55, 60, 70)
+            )
+
+    mask = np.zeros((600, 400), bool)
+    mask[50:550, 40:360] = True
+    inst = Instance(box={"class_id": 0, "score": 0.9}, x1=300, y1=300, x2=700, y2=900,
+                    mask=mask, keep=True)
+    pipeline = types.SimpleNamespace(labels=["person"])
+    return SegmentRuntime().render(cfg, pipeline, frame, [inst], 27.0)
+
+
+def test_the_blur_is_on_by_default():
+    """`sima-vision segment` blurs. The README said "optional" for a while."""
+    from sima_vision.tasks import TASKS
+
+    cfg = TASKS["segment"]().load(
+        None, {"model.path": "m", "source.uri": "c"}, use_file=False
+    )
+    assert cfg.blur.enable is True
+
+
+def test_the_blur_softens_the_background_and_leaves_the_subject_sharp():
+    """Measured as local variance: a blurred checkerboard has almost none."""
+    blurred, plain = segment_render(True), segment_render(False)
+
+    def detail(img, y, x):
+        patch = img[y:y + 120, x:x + 120].astype(np.float32)
+        return float(patch.std())
+
+    assert detail(blurred, 60, 1500) < detail(plain, 60, 1500) * 0.5, "background not blurred"
+    # Inside the mask, well clear of the feathered edge.
+    assert detail(blurred, 500, 420) > detail(plain, 500, 420) * 0.9, "subject was blurred too"
+
+
+def test_the_overlay_is_identical_whether_the_blur_ran_or_not():
+    """The blur composites the image; the overlay is drawn after it.
+
+    So the badge, the captions and the outlines are the same pixels either way.
+    The mask tint is deliberately excluded -- it is translucent, so it takes the
+    colour of whatever it sits on, which is the whole point of it.
+    """
+    blurred, plain = segment_render(True), segment_render(False)
+    draw = DrawConfig()
+
+    # Every pixel the overlay paints opaquely: the badge fill, the caption
+    # band, the box outline and the ink on them. Located by colour rather than
+    # by slice, so the test does not have to know where they landed.
+    opaque = np.zeros(plain.shape[:2], bool)
+    for color in (draw.hud_bg_color, draw.hud_text_color, class_color(0), (255, 255, 255)):
+        opaque |= (plain == np.array(color, np.uint8)).all(axis=2)
+    assert opaque.sum() > 20_000, "found no overlay to compare"
+
+    differing = (blurred[opaque] != plain[opaque]).any(axis=1).sum()
+    assert differing == 0, f"the blur reached {differing} overlay pixels"

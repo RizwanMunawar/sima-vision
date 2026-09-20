@@ -214,16 +214,6 @@ visualization:
   show_labels: on            # the fall state in the caption: upright/falling/fallen
   show_scores: on            # confidence in the caption
 
-  # Full-width strip across the bottom while anyone is down. A red box around
-  # one person is easy to miss on a wall of camera tiles; a band is not.
-  banner:
-    enable: on
-    text_scale: 0.0          # 0 = follow text_scale above
-    text_thickness: 0        # 0 = follow text_thickness above
-    padding: 18
-    alpha: 0.75              # strip opacity, 0.0 to 1.0
-    bg_color: [56, 56, 255]  # red
-    text_color: [255, 255, 255]
   score_decimals: 2          # 2 gives "person 0.57", 0 gives "person 1"
 
   text_color: [255, 255, 255]   # caption text, white
@@ -280,14 +270,3 @@ output:
     overlay: true
     format: jpg              # jpg | png
 
-  # Optional live UDP feed to Neat Insight. Off by default: everything you need
-  # is the annotated video and stills above, which survive the run. Turning this
-  # on also needs inbound UDP 9000-9079 / 9100-9179 opened on the Hyper-V firewall.
-  insight:
-    enable: false
-    annotated: true           # send our overlay. false sends raw and lets Insight draw
-    host: 192.168.137.1       # your PC ip address as the DevKit sees it, NOT 127.0.0.1
-    channel: 0                # video port = video_port_base + channel
-    video_port_base: 9000
-    metadata_port_base: 9100
-    bitrate_kbps: 2000

@@ -48,12 +48,9 @@ def test_negative_flags_become_positive_keywords():
     assert "no_save" not in aliases
 
 
-def test_a_flag_that_clears_something_is_inverted():
-    """`--send` reads as "do send" but clears alerts.dry_run."""
-    aliases, inverted = _alias_table(TASKS["fall"]())
-    assert aliases["send"] == "alerts.dry_run"
-    assert "send" in inverted
-    # ...while a plain negative flag is not inverted twice.
+def test_a_plain_negative_flag_is_not_inverted_twice():
+    """`--no-save` already means save=False; flipping it again would undo it."""
+    _, inverted = _alias_table(TASKS["fall"]())
     assert "save" not in inverted
 
 
@@ -94,15 +91,6 @@ def test_validate_raises_on_a_bad_setting():
         sima_vision.validate(
             "detect", use_config_file=False, model="m", source="c", conf=5.0
         )
-
-
-def test_send_turns_alerts_on_and_dry_run_off():
-    cfg = sima_vision.validate(
-        "fall", use_config_file=False, model="m", source="c",
-        alert_to=["a@x.com"], alert_from="b@x.com", send=True,
-    )
-    assert cfg.alerts.enable is True
-    assert cfg.alerts.dry_run is False
 
 
 def test_anonymise_keyword():

@@ -17,7 +17,7 @@ import sima_vision.runtime as rt
 from sima_vision.samples import BBOX_RECORD, extract_bbox_payload, joined_field, parse_boxes
 from sima_vision.sinks import Pipeline
 from sima_vision.tasks import TASKS
-from sima_vision.tasks.fall import FALLEN, FallPipeline
+from sima_vision.tasks.fall import FALLEN
 
 
 class SampleKind:
@@ -191,17 +191,6 @@ def test_detect_decode_returns_a_bgr_frame_and_boxes():
     assert stage == 0.0
 
 
-def test_detect_metadata_names_the_classes():
-    task = TASKS["detect"]()
-    cfg = task.load(None, {"model.path": "m", "source.uri": "c"}, use_file=False)
-    pipeline = detect_pipeline()
-    runtime = task.runtime(cfg, pipeline)
-    _, boxes, _ = runtime.decode(pipeline, cfg, joined(BOXES), 1)
-    objects = runtime.metadata(pipeline, boxes)
-    assert [o["label"] for o in objects] == ["person", "car"]
-    assert objects[0]["bbox"] == [10.0, 5.0, 20.0, 30.0]
-
-
 # ── fall ──
 
 
@@ -253,51 +242,37 @@ def test_fall_decode_drops_boxes_too_small_to_judge():
     assert tracks == [], "a 90px box in a 400px frame is under the 50% floor"
 
 
-def test_a_fall_fires_an_alert_and_is_counted(tmp_path, monkeypatch):
+def test_a_fall_is_counted_and_reported(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    task, cfg, pipeline = fall_setup(**{
-        "fall.confirm_seconds": 0.0,
-        "alerts.to": ["ops@example.com"],
-        "alerts.attach_snapshot": True,
-    })
+    task, cfg, pipeline = fall_setup(**{"fall.confirm_seconds": 0.0})
     runtime = task.runtime(cfg, pipeline)
-    try:
-        # Upright first, so the track learns a reference height...
-        for index in range(1, 4):
-            runtime.decode(
-                pipeline, cfg, joined([person(50, 40, 30, 200)], 200, 400), index
-            )
-        # ...then wide and short, which is what lying down looks like.
-        for index in range(4, 8):
-            _, tracks, _ = runtime.decode(
-                pipeline, cfg, joined([person(40, 300, 160, 60)], 200, 400), index
-            )
-        assert pipeline.falls >= 1
-        assert any(t.state == FALLEN for t in tracks)
-        # The snapshot the alert refers to must actually be on disk.
-        snapshots = list((tmp_path / cfg.alerts.snapshot_dir).glob("*.jpg"))
-        assert snapshots, "a confirmed fall should have written its snapshot"
-    finally:
-        pipeline.close()
+    # Upright first, so the track learns a reference height...
+    for index in range(1, 4):
+        runtime.decode(pipeline, cfg, joined([person(50, 40, 30, 200)], 200, 400), index)
+    # ...then wide and short, which is what lying down looks like.
+    for index in range(4, 8):
+        _, tracks, _ = runtime.decode(
+            pipeline, cfg, joined([person(40, 300, 160, 60)], 200, 400), index
+        )
+    assert pipeline.falls >= 1
+    assert any(t.state == FALLEN for t in tracks)
 
 
-def test_the_fall_pipeline_closes_its_alert_sender():
-    task, cfg, pipeline = fall_setup(**{"alerts.to": ["a@x.com"]})
-    assert isinstance(pipeline, FallPipeline)
-    assert pipeline.alerts is not None
-    pipeline.close()
-    assert pipeline.alerts is None, "close must drain and drop the sender"
+def test_a_fall_only_changes_the_class_on_the_frame(tmp_path, monkeypatch):
+    """No separate overlay: the fallen box is captioned FALL and that is all."""
+    from sima_vision.tasks.fall import FALL_CLASS, overlay_boxes
 
-
-def test_fall_metadata_carries_the_state():
-    task, cfg, pipeline = fall_setup()
+    monkeypatch.chdir(tmp_path)
+    task, cfg, pipeline = fall_setup(**{"fall.confirm_seconds": 0.0})
     runtime = task.runtime(cfg, pipeline)
-    _, tracks, _ = runtime.decode(
-        pipeline, cfg, joined([person(50, 40, 30, 90)], 200, 400), 1
-    )
-    objects = runtime.metadata(pipeline, tracks)
-    assert objects and objects[0]["state"] in {"upright", "falling", "fallen", "recovering"}
-    assert objects[0]["id"].startswith("track_")
+    for index in range(1, 4):
+        runtime.decode(pipeline, cfg, joined([person(50, 40, 30, 200)], 200, 400), index)
+    for index in range(4, 8):
+        _, tracks, _ = runtime.decode(
+            pipeline, cfg, joined([person(40, 300, 160, 60)], 200, 400), index
+        )
+    boxes, labels = overlay_boxes(tracks, pipeline.labels, pipeline.fall_class_ids)
+    assert FALL_CLASS in [labels[b["class_id"]] for b in boxes]
 
 
 # ── segment ──
@@ -404,15 +379,6 @@ def test_segment_describes_the_output_once(capsys):
     printed = capsys.readouterr().out
     assert printed.count("model output tensors") == 1, "the dump is a one-off"
     assert "packed layout" in printed
-
-
-def test_segment_metadata_carries_the_mask_area():
-    task, cfg, pipeline = segment_setup()
-    runtime = task.runtime(cfg, pipeline)
-    _, instances, _ = runtime.decode(pipeline, cfg, segment_sample(BOXES), 1)
-    objects = runtime.metadata(pipeline, instances)
-    assert objects[0]["mask_area"] > 0
-    assert objects[0]["foreground"] is True
 
 
 def test_keep_classes_marks_only_those_as_foreground():

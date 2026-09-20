@@ -264,14 +264,37 @@ def load_preprocess_config(raw: dict) -> PreprocessConfig:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+#: Caption font scale and stroke at 1080p, which is what every other size here
+#: is expressed against. 1.0 and 2 were sized for reading a still at 100%; on a
+#: wall of camera tiles, or a 1080p clip played in a window, they are too thin
+#: to pick out against the footage.
+TEXT_SCALE = 1.6
+TEXT_THICKNESS = 4
+
+#: Gap between the badge text and the badge edge, and between the badge and the
+#: corner of the frame, at 1080p. The badge used to inherit the caption's 10px
+#: padding and use it as its margin too, which was already snug and stopped
+#: working once the badge text grew: 260x51 of text in a 280x71 box, 10px off
+#: the corner, reads as text with a fill accidentally behind it rather than as
+#: a badge.
+HUD_PADDING = 22
+HUD_MARGIN = 28
+
+#: How much larger the HUD badge is than a caption. The badge is glanced at
+#: while the video plays rather than read, so it is deliberately the largest
+#: text on the frame -- and being derived rather than typed means it stays
+#: larger if TEXT_SCALE is retuned.
+HUD_MULTIPLE = 1.5
+
+
 @dataclass(frozen=True)
 class DrawConfig:
     """Overlay appearance, straight from the ``visualization`` config section.
 
     This is the union of what all three tasks draw. A task simply ignores the
-    fields it has no use for -- ``detect`` never reads ``mask_alpha``, ``segment``
-    never reads ``banner`` -- which is cheaper than three near-identical
-    dataclasses and means one ``visualization`` block documents them all. The
+    fields it has no use for -- ``detect`` never reads ``mask_alpha`` -- which is
+    cheaper than three near-identical dataclasses and means one
+    ``visualization`` block documents them all. The
     few defaults that genuinely differ per task are supplied through
     :attr:`TaskDefaults.draw`.
 
@@ -282,8 +305,10 @@ class DrawConfig:
 
     Attributes:
         box_thickness: Detection rectangle outline weight, in pixels.
-        text_scale: OpenCV font scale for captions.
-        text_thickness: Caption stroke weight, in pixels.
+        text_scale: OpenCV font scale for captions, at ``reference_height``.
+            Defaults to :data:`TEXT_SCALE`.
+        text_thickness: Caption stroke weight in pixels, at
+            ``reference_height``. Defaults to :data:`TEXT_THICKNESS`.
         text_padding: Gap between caption text and the edge of its band.
         centre_dot: Whether to mark the centre of each box. ``detect``, ``fall``.
         centre_dot_radius: Radius of that marker, in pixels.
@@ -299,13 +324,6 @@ class DrawConfig:
         show_boxes: ``segment``: whether to draw the bounding rectangle as well.
             Off by default: the mask already shows the extent.
         show_track_ids: ``fall``: whether captions carry the track id.
-        banner: ``fall``: whether to draw the full-width alert strip.
-        banner_text_scale: Banner font scale. 0 follows ``text_scale``.
-        banner_text_thickness: Banner stroke. 0 follows ``text_thickness``.
-        banner_padding: Gap between banner text and the strip edge.
-        banner_alpha: Strip opacity, 0.0 to 1.0.
-        banner_bg_color: Strip fill, BGR.
-        banner_text_color: Strip text, BGR.
         hud_text_color: Frame-rate badge text colour, BGR.
         hud_bg_color: Frame-rate badge fill colour, BGR. Purple by default,
             which reads as an overlay rather than as part of the footage the
@@ -314,15 +332,16 @@ class DrawConfig:
             little above it by default: the badge is glanced at while the
             video plays, not read, so it wants to be larger than a caption.
         hud_text_thickness: Badge stroke weight. 0 follows ``text_thickness``.
-        hud_padding: Gap between badge text and badge edge, on every side. 0
-            follows ``text_padding``. This is what sets the badge size when no
+        hud_padding: Gap between badge text and badge edge, on every side.
+            Defaults to :data:`HUD_PADDING`; 0 follows ``text_padding``. This
+            is what sets the badge size when no
             minimum is given.
         hud_padding_x: Left/right gap. 0 follows ``hud_padding``.
         hud_padding_y: Top/bottom gap. 0 follows ``hud_padding``.
-        hud_margin_x: Gap between the badge and the left frame edge. 0 follows
-            the resolved horizontal padding.
-        hud_margin_y: Gap between the badge and the top frame edge. 0 follows
-            the resolved vertical padding.
+        hud_margin_x: Gap between the badge and the left frame edge. Defaults
+            to :data:`HUD_MARGIN`; 0 follows the resolved horizontal padding.
+        hud_margin_y: Gap between the badge and the top frame edge. Defaults
+            to :data:`HUD_MARGIN`; 0 follows the resolved vertical padding.
         hud_fps_decimals: Decimal places on the frame rate. 0 gives ``FPS: 25``,
             1 gives ``FPS: 24.8``.
         hud_min_width: Floor on badge width in pixels. 0 fits the text.
@@ -332,8 +351,8 @@ class DrawConfig:
     """
 
     box_thickness: int = 3
-    text_scale: float = 1.0
-    text_thickness: int = 2
+    text_scale: float = TEXT_SCALE
+    text_thickness: int = TEXT_THICKNESS
     text_padding: int = 10
     centre_dot: bool = True
     centre_dot_radius: int = 7
@@ -348,23 +367,27 @@ class DrawConfig:
     show_boxes: bool = False
 
     show_track_ids: bool = True
-    banner: bool = True
-    banner_text_scale: float = 0.0
-    banner_text_thickness: int = 0
-    banner_padding: int = 18
-    banner_alpha: float = 0.75
-    banner_bg_color: tuple[int, int, int] = (56, 56, 255)
-    banner_text_color: tuple[int, int, int] = (255, 255, 255)
 
     hud_text_color: tuple[int, int, int] = (255, 255, 255)
-    hud_bg_color: tuple[int, int, int] = (128, 0, 128)
-    hud_text_scale: float = 1.3
-    hud_text_thickness: int = 0
-    hud_padding: int = 0
+    # #C11C84. BGR, like every colour here. White on it is 5.6:1 -- past the
+    # 4.5:1 that large text needs, and the badge's text is large by design, so
+    # the reading holds over whatever the frame is doing behind it.
+    hud_bg_color: tuple[int, int, int] = (132, 28, 193)
+    # Derived, not typed: the badge is HUD_MULTIPLE times a caption, and
+    # writing 2.4 and 6 here would quietly stop being true the first time
+    # TEXT_SCALE moved. 0 still means "exactly the caption" for anyone who
+    # wants the badge to stop standing out.
+    hud_text_scale: float = round(TEXT_SCALE * HUD_MULTIPLE, 3)
+    hud_text_thickness: int = round(TEXT_THICKNESS * HUD_MULTIPLE)
+    hud_padding: int = HUD_PADDING
     hud_padding_x: int = 0
     hud_padding_y: int = 0
-    hud_margin_x: int = 0
-    hud_margin_y: int = 0
+    # Its own number rather than falling through to the padding. They answer
+    # different questions -- how much room the text gets, and how far the badge
+    # sits off the corner -- and one value for both meant tightening the badge
+    # also shoved it into the corner.
+    hud_margin_x: int = HUD_MARGIN
+    hud_margin_y: int = HUD_MARGIN
     hud_fps_decimals: int = 0
     hud_min_width: int = 0
     hud_min_height: int = 0
@@ -386,7 +409,6 @@ def load_draw_config(raw: dict, default: DrawConfig | None = None) -> DrawConfig
     """
     section = _section(raw, "visualization")
     hud = _section(section, "hud")
-    banner = _section(section, "banner")
     default = default or DrawConfig()
     return DrawConfig(
         box_thickness=_int(section, "box_thickness", default.box_thickness),
@@ -408,13 +430,6 @@ def load_draw_config(raw: dict, default: DrawConfig | None = None) -> DrawConfig
         show_track_ids=(
             _flag(section, "show_track_ids", "on" if default.show_track_ids else "off") == "on"
         ),
-        banner=_flag(banner, "enable", "on" if default.banner else "off") == "on",
-        banner_text_scale=_float(banner, "text_scale", default.banner_text_scale),
-        banner_text_thickness=_int(banner, "text_thickness", default.banner_text_thickness),
-        banner_padding=_int(banner, "padding", default.banner_padding),
-        banner_alpha=_float(banner, "alpha", default.banner_alpha),
-        banner_bg_color=_color(banner, "bg_color", default.banner_bg_color),
-        banner_text_color=_color(banner, "text_color", default.banner_text_color),
         hud_text_color=_color(hud, "text_color", default.hud_text_color),
         hud_bg_color=_color(hud, "bg_color", default.hud_bg_color),
         hud_text_scale=_float(hud, "text_scale", default.hud_text_scale),
@@ -452,7 +467,6 @@ class TaskDefaults:
         overflow_policy: Default ``runtime.overflow_policy``.
         save_dir: Default ``output.save.dir``.
         video_path: Default ``output.video.path``.
-        insight_enable: Default ``output.insight.enable``.
         draw: Per-task :class:`DrawConfig` defaults.
     """
 
@@ -462,7 +476,6 @@ class TaskDefaults:
     overflow_policy: str = "auto"
     save_dir: str = "frames"
     video_path: str = "output.mp4"
-    insight_enable: bool = False
     draw: DrawConfig = DrawConfig()
 
 
@@ -564,9 +577,13 @@ class BaseConfig:
         overflow_policy: ``auto``, ``keep_latest``, ``block`` or ``drop_incoming``.
         profile: Whether to print per-stage timings.
         profile_interval: Frames per profiling window.
-        save_enable: Whether to write annotated stills.
+        save_enable: Whether to write annotated stills. Off by default: the
+            annotated video is the output people want, and a run that also
+            dropped a still every 10 frames left a few hundred JPEGs per clip
+            beside it that nobody asked for and everybody then deleted.
+            ``--save``, ``--save-dir`` or ``--save-every`` turns them back on.
         save_dir: Directory for stills.
-        save_every: Write every Nth frame. 0 disables.
+        save_every: Write every Nth frame once stills are on. 0 disables.
         save_overlay: Whether stills carry the overlay.
         save_format: ``jpg`` or ``png``.
         video_enable: Whether to write an annotated video on the DevKit.
@@ -579,14 +596,6 @@ class BaseConfig:
             MJPG fallback.
         video_fps: Output frame rate. 0 matches the source.
         video_hud: Whether to draw the frame-rate badge.
-        insight_enable: Whether to stream to Neat Insight.
-        insight_annotated: Whether Insight receives the annotated frame. False
-            sends the raw frame and lets Insight draw its own overlay.
-        insight_host: Insight address as the DevKit sees it.
-        insight_channel: Channel offset added to both port bases.
-        video_port_base: First UDP video port.
-        metadata_port_base: First UDP metadata port.
-        bitrate_kbps: H.264 encoder bitrate for the Insight feed.
         draw: Overlay appearance. See :class:`DrawConfig`.
         config_path: The file this came from, or None when it is all defaults.
             Reported by ``--validate`` and used to resolve relative asset paths.
@@ -630,7 +639,7 @@ class BaseConfig:
     profile: bool = False
     profile_interval: int = 100
 
-    save_enable: bool = True
+    save_enable: bool = False
     save_dir: str = "frames"
     save_every: int = 10
     save_overlay: bool = True
@@ -643,14 +652,6 @@ class BaseConfig:
     video_codec: str = "mp4v"
     video_fps: int = 0
     video_hud: bool = True
-
-    insight_enable: bool = False
-    insight_annotated: bool = True
-    insight_host: str = "127.0.0.1"
-    insight_channel: int = 0
-    video_port_base: int = 9000
-    metadata_port_base: int = 9100
-    bitrate_kbps: int = 2000
 
     draw: DrawConfig = DrawConfig()
 
@@ -714,7 +715,6 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
     output = _section(raw, "output")
     save = _section(output, "save")
     video = _section(output, "video")
-    insight = _section(output, "insight")
     source_type = _str(source, "type", "video").lower()
 
     # An unset path is not an error any more: it means "the default for this
@@ -764,7 +764,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         overflow_policy=_str(runtime, "overflow_policy", defaults.overflow_policy).lower(),
         profile=_bool(runtime, "profile", False),
         profile_interval=_int(runtime, "profile_interval", 100),
-        save_enable=_bool(save, "enable", True),
+        save_enable=_bool(save, "enable", False),
         save_dir=_str(save, "dir", defaults.save_dir),
         save_every=_int(save, "every", 10),
         save_overlay=_bool(save, "overlay", True),
@@ -776,13 +776,6 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         video_codec=_str(video, "codec", "mp4v"),
         video_fps=_int(video, "fps", 0),
         video_hud=_bool(video, "hud", True),
-        insight_enable=_bool(insight, "enable", defaults.insight_enable),
-        insight_annotated=_bool(insight, "annotated", True),
-        insight_host=_str(insight, "host", "127.0.0.1"),
-        insight_channel=_int(insight, "channel", 0),
-        video_port_base=_int(insight, "video_port_base", 9000),
-        metadata_port_base=_int(insight, "metadata_port_base", 9100),
-        bitrate_kbps=_int(insight, "bitrate_kbps", 2000),
         draw=load_draw_config(raw, defaults.draw),
         config_path=path,
     )
@@ -874,25 +867,6 @@ def validate_base(cfg: BaseConfig) -> None:
         )
     if cfg.video_fps < 0:
         raise ValueError("output.video.fps must be >= 0")
-    if cfg.insight_enable and not cfg.insight_host:
-        raise ValueError("output.insight.host must be set when insight is enabled")
-    # Two senders on one port is not a warning-level mistake: the H.264 encoder
-    # fails to configure, and because it shares the codec daemon with the
-    # decoder feeding the source, the whole pipeline stalls a few frames in.
-    # That looks like "the output video is 12 frames long", which is a long way
-    # from the actual cause.
-    if cfg.insight_enable and cfg.video_port_base == cfg.metadata_port_base:
-        raise ValueError(
-            f"output.insight.video_port_base and metadata_port_base are both "
-            f"{cfg.video_port_base}. They must differ; the defaults are 9000 and 9100.\n"
-            f"  Sharing a port wedges the encoder, which stalls the source and "
-            f"truncates the recording."
-        )
-    if cfg.insight_enable and 9900 in (cfg.video_port_base, cfg.metadata_port_base):
-        raise ValueError(
-            "output.insight port base 9900 is the Neat Insight web UI port, not a "
-            "stream port.\n  Use video_port_base: 9000 and metadata_port_base: 9100."
-        )
     if not 0.0 <= cfg.draw.mask_alpha <= 1.0:
         raise ValueError("visualization.mask_alpha must be in [0.0, 1.0]")
 
