@@ -250,12 +250,14 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     out.add_argument(
         "--hud-scale", dest="visualization.hud.text_scale", type=float,
         metavar="N",
-        help="Frame-rate badge font size. Default 1.3; 0 follows the caption scale.",
+        help="Frame-rate badge font size. Default 2.4, which is 1.5x the caption "
+             "scale; 0 follows the caption scale exactly.",
     )
     out.add_argument(
         "--hud-thickness", dest="visualization.hud.text_thickness", type=int,
         metavar="N",
-        help="Badge stroke weight. 0 follows the caption thickness.",
+        help="Badge stroke weight. Default 6, which is 1.5x the caption thickness; "
+             "0 follows the caption thickness exactly.",
     )
     out.add_argument(
         "--hud-bg", dest="visualization.hud.bg_color", type=bgr_colour,

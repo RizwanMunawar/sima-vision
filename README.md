@@ -120,8 +120,8 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--save-every N` | all | Write every Nth still. Default `10` once stills are on; implies `--save`. `0` disables |
 | `--no-save` | all | Do not write stills. Already the default; use it to override a config file |
 | `--no-hud` | all | Leave the frame-rate badge off the overlay |
-| `--hud-scale N` | all | Frame-rate badge font size. Default `1.3`; `0` follows the caption scale |
-| `--hud-thickness N` | all | Badge stroke weight. `0` follows the caption thickness |
+| `--hud-scale N` | all | Frame-rate badge font size. Default `2.4`, which is 1.5x the caption scale; `0` follows the caption scale exactly |
+| `--hud-thickness N` | all | Badge stroke weight. Default `6`, which is 1.5x the caption thickness; `0` follows it exactly |
 | `--hud-bg B,G,R` | all | Badge fill colour. Default `128,0,128` |
 | `--hud-color B,G,R` | all | Badge text colour. Default `255,255,255` |
 | `--hud-padding PX` | all | Gap between badge text and its edge, which is what sizes the badge |

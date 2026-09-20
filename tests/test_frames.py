@@ -530,3 +530,85 @@ def test_every_pixel_of_the_badge_survives_a_box_on_top_of_it(app):
     rendered = runtime.render(cfg, pipeline, frame, results, BADGE_FPS)
     lost = int((rendered[painted] != badge[painted]).any(axis=1).sum())
     assert lost == 0, f"{app} overwrote {lost} of {int(painted.sum())} badge pixels"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Text sized for the resolution
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_captions_are_sized_for_1080p():
+    """The numbers are the point, so they are written down.
+
+    1.0 and 2 were sized for reading a still at 100%. Played in a window, or on
+    a wall of camera tiles, a two-pixel stroke does not separate from the
+    footage behind it.
+    """
+    draw = DrawConfig()
+    assert (draw.text_scale, draw.text_thickness) == (1.6, 4)
+    assert draw.reference_height == 1080.0
+    assert draw.auto_scale is True
+
+
+def test_the_badge_is_one_and_a_half_times_a_caption():
+    """Asserted as a ratio, not as 2.4 and 6.
+
+    The badge is derived from the caption precisely so that retuning the
+    caption cannot leave the badge behind. A test against the literals would
+    pass while that relationship quietly broke.
+    """
+    from sima_vision.config import HUD_MULTIPLE, TEXT_SCALE, TEXT_THICKNESS
+
+    draw = DrawConfig()
+    assert HUD_MULTIPLE == 1.5
+    assert draw.hud_text_scale == round(TEXT_SCALE * HUD_MULTIPLE, 3) == 2.4
+    assert draw.hud_text_thickness == round(TEXT_THICKNESS * HUD_MULTIPLE) == 6
+    assert draw.hud_text_scale / draw.text_scale == pytest.approx(HUD_MULTIPLE)
+    assert draw.hud_text_thickness / draw.text_thickness == pytest.approx(HUD_MULTIPLE)
+
+
+@pytest.mark.parametrize(
+    ("size", "multiplier"),
+    [
+        ((480, 640), pytest.approx(4 / 9, abs=0.01)),
+        ((720, 1280), pytest.approx(2 / 3, abs=0.01)),
+        ((1080, 1920), 1.0),
+        ((1440, 2560), pytest.approx(4 / 3, abs=0.01)),
+        ((2160, 3840), 2.0),
+    ],
+)
+def test_text_grows_with_the_resolution(size, multiplier):
+    """1080p is 1.0 by definition; everything else follows the short side."""
+    assert draw_scale(np.zeros((*size, 3), np.uint8), DrawConfig()) == multiplier
+
+
+def caption_ink_height(frame_h: int, frame_w: int) -> int:
+    """How tall the caption's ink actually is on a frame of this size."""
+    draw = DrawConfig()
+    scale = draw_scale(np.zeros((frame_h, frame_w, 3), np.uint8), draw)
+    above, below = text_ink_extent(
+        "person 0.90",
+        draw.text_scale * scale,
+        max(1, int(round(draw.text_thickness * scale))),
+    )
+    return above + below
+
+
+def test_a_4k_caption_is_twice_the_height_of_a_1080p_one():
+    """The whole point of scaling by resolution, measured on real glyphs.
+
+    Not a restatement of `draw_scale`: this goes through the font metrics, which
+    is where a scale that is computed and then dropped on the floor would show.
+    """
+    hd = caption_ink_height(1080, 1920)
+    uhd = caption_ink_height(2160, 3840)
+    assert hd > 20, "a 1080p caption should be substantial"
+    assert uhd == pytest.approx(hd * 2, rel=0.08)
+
+
+def test_a_1080p_caption_is_visibly_bigger_than_the_old_default():
+    """The change is worth having, so its size is asserted rather than assumed."""
+    draw = DrawConfig()
+    old = text_ink_extent("person 0.90", 1.0, 2)
+    new = text_ink_extent("person 0.90", draw.text_scale, draw.text_thickness)
+    assert sum(new) > sum(old) * 1.4

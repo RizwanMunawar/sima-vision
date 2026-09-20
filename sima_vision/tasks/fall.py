@@ -885,7 +885,6 @@ def write_snapshot(cfg: FallAppConfig, track: Track, frame_index: int, frame) ->
 
 class FallRuntime(TaskRuntime):
     output_label = "detector_output"
-    stream = "fall-detection"
     unit = "people"
 
     def decode(self, pipeline: FallPipeline, cfg: FallAppConfig, sample, index: int):

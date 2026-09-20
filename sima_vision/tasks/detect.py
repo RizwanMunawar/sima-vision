@@ -24,7 +24,6 @@ DETECT_DRAW = DrawConfig(box_thickness=3, centre_dot=True)
 
 class DetectRuntime(TaskRuntime):
     output_label = "detector_output"
-    stream = "object-detection"
     unit = "detections"
 
     def decode(self, pipeline: Pipeline, cfg, sample, index: int):

@@ -264,6 +264,20 @@ def load_preprocess_config(raw: dict) -> PreprocessConfig:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+#: Caption font scale and stroke at 1080p, which is what every other size here
+#: is expressed against. 1.0 and 2 were sized for reading a still at 100%; on a
+#: wall of camera tiles, or a 1080p clip played in a window, they are too thin
+#: to pick out against the footage.
+TEXT_SCALE = 1.6
+TEXT_THICKNESS = 4
+
+#: How much larger the HUD badge is than a caption. The badge is glanced at
+#: while the video plays rather than read, so it is deliberately the largest
+#: text on the frame -- and being derived rather than typed means it stays
+#: larger if TEXT_SCALE is retuned.
+HUD_MULTIPLE = 1.5
+
+
 @dataclass(frozen=True)
 class DrawConfig:
     """Overlay appearance, straight from the ``visualization`` config section.
@@ -282,8 +296,10 @@ class DrawConfig:
 
     Attributes:
         box_thickness: Detection rectangle outline weight, in pixels.
-        text_scale: OpenCV font scale for captions.
-        text_thickness: Caption stroke weight, in pixels.
+        text_scale: OpenCV font scale for captions, at ``reference_height``.
+            Defaults to :data:`TEXT_SCALE`.
+        text_thickness: Caption stroke weight in pixels, at
+            ``reference_height``. Defaults to :data:`TEXT_THICKNESS`.
         text_padding: Gap between caption text and the edge of its band.
         centre_dot: Whether to mark the centre of each box. ``detect``, ``fall``.
         centre_dot_radius: Radius of that marker, in pixels.
@@ -332,8 +348,8 @@ class DrawConfig:
     """
 
     box_thickness: int = 3
-    text_scale: float = 1.0
-    text_thickness: int = 2
+    text_scale: float = TEXT_SCALE
+    text_thickness: int = TEXT_THICKNESS
     text_padding: int = 10
     centre_dot: bool = True
     centre_dot_radius: int = 7
@@ -358,8 +374,12 @@ class DrawConfig:
 
     hud_text_color: tuple[int, int, int] = (255, 255, 255)
     hud_bg_color: tuple[int, int, int] = (128, 0, 128)
-    hud_text_scale: float = 1.3
-    hud_text_thickness: int = 0
+    # Derived, not typed: the badge is HUD_MULTIPLE times a caption, and
+    # writing 2.4 and 6 here would quietly stop being true the first time
+    # TEXT_SCALE moved. 0 still means "exactly the caption" for anyone who
+    # wants the badge to stop standing out.
+    hud_text_scale: float = round(TEXT_SCALE * HUD_MULTIPLE, 3)
+    hud_text_thickness: int = round(TEXT_THICKNESS * HUD_MULTIPLE)
     hud_padding: int = 0
     hud_padding_x: int = 0
     hud_padding_y: int = 0

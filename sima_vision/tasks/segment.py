@@ -495,7 +495,6 @@ def draw_instances(frame, instances: list[Instance], labels: list[str], draw) ->
 
 class SegmentRuntime(TaskRuntime):
     output_label = "segmenter_output"
-    stream = "instance-segmentation"
     unit = "instances"
     stage = "masks"
 
