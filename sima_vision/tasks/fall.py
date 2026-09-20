@@ -816,7 +816,7 @@ def draw_tracks(frame, tracks: list[Track], draw, labels: list[str]) -> None:
             cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
         draw_caption(frame, track_caption(track, draw, labels), (x1, y1),
-                     color, draw, scale)
+                     color, draw, scale, max_width=x2 - x1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

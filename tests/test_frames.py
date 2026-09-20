@@ -17,6 +17,7 @@ from sima_vision.draw import (
     class_color,
     draw_banner,
     draw_boxes,
+    draw_caption,
     draw_fps,
     draw_scale,
     text_ink_extent,
@@ -806,3 +807,83 @@ def test_boxes_and_masks_share_one_palette():
     from sima_vision.tasks.segment import class_color as masks_use
 
     assert boxes_use is masks_use
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Captions stay inside their own box
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def band_width(frame, color, above_row: int) -> int:
+    """Widest run of the band's fill colour in the rows above ``above_row``.
+
+    Restricted to those rows on purpose: the box outline is the same colour,
+    and its top and bottom edges are as wide as the box, so measuring the whole
+    frame measures the box rather than the caption.
+    """
+    region = frame[: max(0, above_row - 2)]
+    filled = (region == np.array(color, np.uint8)).all(axis=2)
+    return int(filled.sum(axis=1).max()) if filled.size else 0
+
+
+def one_box(x1, y1, x2, y2, class_id=0, score=0.93):
+    return {"x1": float(x1), "y1": float(y1), "x2": float(x2), "y2": float(y2),
+            "score": score, "class_id": class_id}
+
+
+def test_a_caption_does_not_overhang_a_narrow_box():
+    """At 1.6 scale `person 0.93` is ~300px wide, a distant person is not.
+
+    Overhanging, it covers whatever stands beside that box -- and because the
+    boxes are drawn largest-first, a small object's caption lands on top of its
+    bigger neighbour. That reads as detections flickering in and out, since it
+    depends on where things happen to be standing.
+    """
+    frame = np.full((1080, 1920, 3), 40, np.uint8)
+    draw_boxes(frame, [one_box(400, 400, 590, 650)], ["person"], DrawConfig())
+    # The band is the fill; a couple of pixels of slack for the rounding.
+    assert band_width(frame, class_color(0), 400) <= 190 + 2
+
+
+def test_a_wide_box_keeps_the_configured_caption_size():
+    """The shrink is a repair for narrow boxes, not a new default size."""
+    wide = np.full((1080, 1920, 3), 40, np.uint8)
+    draw_boxes(wide, [one_box(200, 400, 1400, 900)], ["person"], DrawConfig())
+
+    reference = np.full((1080, 1920, 3), 40, np.uint8)
+    draw_caption(reference, "person 0.93", (200, 400), class_color(0), DrawConfig(), 1.0)
+
+    assert band_width(wide, class_color(0), 400) == band_width(reference, class_color(0), 400)
+
+
+def test_a_caption_stops_shrinking_before_it_becomes_unreadable():
+    """A caption too small to read is no better than one covering its neighbour."""
+    from sima_vision.draw import CAPTION_MIN_SHRINK
+
+    frame = np.full((1080, 1920, 3), 40, np.uint8)
+    # 30px wide: fitting `person 0.93` into it would mean a tenth of the size.
+    draw_boxes(frame, [one_box(900, 400, 930, 700)], ["person"], DrawConfig())
+    painted = band_width(frame, class_color(0), 400)
+    assert painted > 30, "floored rather than shrunk to nothing"
+
+    reference = np.full((1080, 1920, 3), 40, np.uint8)
+    draw_caption(reference, "person 0.93", (900, 400), class_color(0), DrawConfig(), 1.0)
+    full = band_width(reference, class_color(0), 400)
+    assert painted == pytest.approx(full * CAPTION_MIN_SHRINK, rel=0.12)
+
+
+def test_a_small_box_caption_no_longer_buries_its_larger_neighbour():
+    """The symptom, asserted end to end: boxes vanishing in a crowd.
+
+    The big box is drawn first and the small one's caption last, so before the
+    fit the band landed straight across the big box's outline.
+    """
+    frame = np.full((1080, 1920, 3), 40, np.uint8)
+    big = one_box(200, 300, 700, 900, class_id=1)
+    small = one_box(730, 300, 900, 620, class_id=0)
+    draw_boxes(frame, [big, small], ["person", "bicycle"], DrawConfig())
+
+    # Every row of the big box's right edge must still be its own colour.
+    edge = frame[310:890, 697:700]
+    hits = (edge == np.array(class_color(1), np.uint8)).all(axis=2).any(axis=1)
+    assert hits.all(), f"{(~hits).sum()} rows of the neighbour's box were covered"

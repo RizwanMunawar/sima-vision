@@ -484,7 +484,8 @@ def draw_instances(frame, instances: list[Instance], labels: list[str], draw) ->
             cv2.rectangle(frame, (inst.x1, inst.y1), (inst.x2, inst.y2), color, box_thickness)
 
         draw_caption(
-            frame, caption_text(inst.box, labels, draw), (inst.x1, inst.y1), color, draw, scale
+            frame, caption_text(inst.box, labels, draw), (inst.x1, inst.y1), color, draw,
+            scale, max_width=inst.x2 - inst.x1,
         )
 
 
