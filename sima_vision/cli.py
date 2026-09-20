@@ -271,7 +271,8 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     )
     out.add_argument(
         "--hud-padding", dest="visualization.hud.padding", type=int, metavar="PX",
-        help="Gap between badge text and its edge, which is what sizes the badge.",
+        help="Gap between badge text and its edge, which is what sizes the badge. "
+             "Default 22; 0 follows the caption padding.",
     )
 
 

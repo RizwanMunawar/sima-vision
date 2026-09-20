@@ -612,3 +612,73 @@ def test_a_1080p_caption_is_visibly_bigger_than_the_old_default():
     old = text_ink_extent("person 0.90", 1.0, 2)
     new = text_ink_extent("person 0.90", draw.text_scale, draw.text_thickness)
     assert sum(new) > sum(old) * 1.4
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The badge's own box
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def badge_box(draw, fps: float = 28.0, size=(1080, 1920)):
+    """The painted badge's bounding box as ``(left, top, width, height)``."""
+    img = np.full((*size, 3), 40, np.uint8)
+    draw_fps(img, fps, draw)
+    filled = (img == np.array(draw.hud_bg_color, np.uint8)).all(axis=2)
+    rows, cols = np.where(filled)
+    assert rows.size, "no badge was painted"
+    return (int(cols.min()), int(rows.min()),
+            int(cols.max() - cols.min() + 1), int(rows.max() - rows.min() + 1))
+
+
+def test_the_badge_sits_off_the_corner_by_its_margin():
+    """Margin is its own number now.
+
+    It used to fall through to the padding, so the one value both sized the
+    badge and placed it: tightening the box also shoved it into the corner.
+    """
+    from sima_vision.config import HUD_MARGIN
+
+    draw = DrawConfig()
+    assert draw.hud_margin_x == draw.hud_margin_y == HUD_MARGIN == 28
+    left, top, _, _ = badge_box(draw)
+    assert (left, top) == (HUD_MARGIN, HUD_MARGIN)
+
+
+def test_the_padding_is_what_sizes_the_badge_around_its_text():
+    """260x51 of text in a 280x71 box read as a fill left on by accident."""
+    import cv2
+
+    import sima_vision.runtime as rt
+    from sima_vision.config import HUD_PADDING
+
+    draw = DrawConfig()
+    assert draw.hud_padding == HUD_PADDING == 22
+    (text_w, _), _ = cv2.getTextSize(
+        "FPS: 28", rt.FONT, draw.hud_text_scale, draw.hud_text_thickness
+    )
+    above, below = text_ink_extent("FPS: 28", draw.hud_text_scale, draw.hud_text_thickness)
+
+    # cv2.rectangle paints both endpoints, so the filled span is one pixel
+    # wider than the box it was asked for.
+    _, _, width, height = badge_box(draw)
+    assert width - 1 == text_w + HUD_PADDING * 2
+    assert height - 1 == above + below + HUD_PADDING * 2
+
+
+def test_padding_and_margin_scale_with_the_frame():
+    """Both are 1080p numbers, like everything else in DrawConfig."""
+    draw = DrawConfig()
+    left_hd, top_hd, w_hd, h_hd = badge_box(draw, size=(1080, 1920))
+    left_4k, top_4k, w_4k, h_4k = badge_box(draw, size=(2160, 3840))
+    assert (left_4k, top_4k) == (left_hd * 2, top_hd * 2)
+    assert w_4k == pytest.approx(w_hd * 2, rel=0.03)
+    assert h_4k == pytest.approx(h_hd * 2, rel=0.03)
+
+
+def test_zero_still_means_follow_the_caption():
+    """The escape hatch survives the defaults moving off 0."""
+    draw = DrawConfig(hud_padding=0, hud_margin_x=0, hud_margin_y=0)
+    left, top, _, _ = badge_box(draw)
+    # With no margin of its own, the badge falls back to its resolved padding,
+    # which with hud_padding at 0 is the caption's.
+    assert (left, top) == (draw.text_padding, draw.text_padding)

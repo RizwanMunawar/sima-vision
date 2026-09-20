@@ -271,6 +271,15 @@ def load_preprocess_config(raw: dict) -> PreprocessConfig:
 TEXT_SCALE = 1.6
 TEXT_THICKNESS = 4
 
+#: Gap between the badge text and the badge edge, and between the badge and the
+#: corner of the frame, at 1080p. The badge used to inherit the caption's 10px
+#: padding and use it as its margin too, which was already snug and stopped
+#: working once the badge text grew: 260x51 of text in a 280x71 box, 10px off
+#: the corner, reads as text with a fill accidentally behind it rather than as
+#: a badge.
+HUD_PADDING = 22
+HUD_MARGIN = 28
+
 #: How much larger the HUD badge is than a caption. The badge is glanced at
 #: while the video plays rather than read, so it is deliberately the largest
 #: text on the frame -- and being derived rather than typed means it stays
@@ -330,15 +339,16 @@ class DrawConfig:
             little above it by default: the badge is glanced at while the
             video plays, not read, so it wants to be larger than a caption.
         hud_text_thickness: Badge stroke weight. 0 follows ``text_thickness``.
-        hud_padding: Gap between badge text and badge edge, on every side. 0
-            follows ``text_padding``. This is what sets the badge size when no
+        hud_padding: Gap between badge text and badge edge, on every side.
+            Defaults to :data:`HUD_PADDING`; 0 follows ``text_padding``. This
+            is what sets the badge size when no
             minimum is given.
         hud_padding_x: Left/right gap. 0 follows ``hud_padding``.
         hud_padding_y: Top/bottom gap. 0 follows ``hud_padding``.
-        hud_margin_x: Gap between the badge and the left frame edge. 0 follows
-            the resolved horizontal padding.
-        hud_margin_y: Gap between the badge and the top frame edge. 0 follows
-            the resolved vertical padding.
+        hud_margin_x: Gap between the badge and the left frame edge. Defaults
+            to :data:`HUD_MARGIN`; 0 follows the resolved horizontal padding.
+        hud_margin_y: Gap between the badge and the top frame edge. Defaults
+            to :data:`HUD_MARGIN`; 0 follows the resolved vertical padding.
         hud_fps_decimals: Decimal places on the frame rate. 0 gives ``FPS: 25``,
             1 gives ``FPS: 24.8``.
         hud_min_width: Floor on badge width in pixels. 0 fits the text.
@@ -380,11 +390,15 @@ class DrawConfig:
     # wants the badge to stop standing out.
     hud_text_scale: float = round(TEXT_SCALE * HUD_MULTIPLE, 3)
     hud_text_thickness: int = round(TEXT_THICKNESS * HUD_MULTIPLE)
-    hud_padding: int = 0
+    hud_padding: int = HUD_PADDING
     hud_padding_x: int = 0
     hud_padding_y: int = 0
-    hud_margin_x: int = 0
-    hud_margin_y: int = 0
+    # Its own number rather than falling through to the padding. They answer
+    # different questions -- how much room the text gets, and how far the badge
+    # sits off the corner -- and one value for both meant tightening the badge
+    # also shoved it into the corner.
+    hud_margin_x: int = HUD_MARGIN
+    hud_margin_y: int = HUD_MARGIN
     hud_fps_decimals: int = 0
     hud_min_width: int = 0
     hud_min_height: int = 0
