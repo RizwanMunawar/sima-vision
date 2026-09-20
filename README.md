@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/sima-devkit-docs-logo-home.jpg" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0">
+<img src="assets/sima-devkit-docs-logo-home.png" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0">
 
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
 [![Palette SDK](https://img.shields.io/badge/Palette_SDK-2.1.2-FF8C00)](https://docs.sima.ai)
@@ -12,9 +12,6 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-6C757D)](LICENSE)
 [![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703&labelColor=333)](https://github.com/ultralytics/ultralytics)
 
-[![Fall detection](https://img.shields.io/badge/Fall-detection-111F68)](https://github.com/ultralytics/ultralytics)
-[![Segmentation and blur](https://img.shields.io/badge/Segmentation-blur-FF64DA)](https://github.com/ultralytics/ultralytics)
-[![Object detection](https://img.shields.io/badge/Object-detection-042AFF)](https://github.com/ultralytics/ultralytics)
 
 </div>
 
@@ -31,15 +28,23 @@ or later.
 
 ## Quickstart
 
-![on the DevKit](https://img.shields.io/badge/run_on-DevKit-E63946?style=flat-square)
+![on the DevKit](https://img.shields.io/badge/run_on-DevKit-111f68)
 
-No Docker, no WSL, no login. Every command here is typed on the board.
+Every command here is typed on the board.
 
 ```bash
 pip install sima-cli
+
+# Login via SiMa.ai Portal
 sima-cli login
-sima-cli neat install core@v0.3.0  # once per board
+
+# Install Neat core, once
+sima-cli neat install core@v0.3.0
+
+# Install sima-vision
 pip install sima-vision
+
+# Run object detection
 sima-vision detect
 ```
 
@@ -57,7 +62,7 @@ The annotated video is the only thing written. Stills are off unless you ask for
 with `--save`.
 
 <details>
-<summary>🎨 &nbsp;<b>Instance segmentation</b> &nbsp;·&nbsp; per-pixel masks, with an optional blur</summary>
+<summary>&nbsp;<b>Instance segmentation</b> &nbsp;·&nbsp; per-pixel masks, with an optional blur</summary>
 
 <br>
 
@@ -70,7 +75,7 @@ sima-vision segment --blur --keep-classes person
 </details>
 
 <details>
-<summary>🚨 &nbsp;<b>Fall detection</b> &nbsp;·&nbsp; tracks people, with optional email alerts</summary>
+<summary>&nbsp;<b>Fall detection</b> &nbsp;·&nbsp; tracks people, with optional email alerts</summary>
 
 <br>
 
@@ -156,7 +161,7 @@ beats the built-in defaults.
 
 ## Your own model
 
-![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
+![on your PC](https://img.shields.io/badge/run_on-Host_PC-64239E)
 
 A trained `.pt` has to be compiled into a `.tar.gz` pack before the board can run it. The
 compiler is the `afe` package and exists only inside the Palette Model SDK container,
@@ -165,7 +170,7 @@ needs a [community.sima.ai](https://community.sima.ai) account and ~10 GB of dis
 takes about 30 minutes the first time. [Quickstart](#quickstart) needs none of it.
 
 <details>
-<summary>🧠 &nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b></summary>
+<summary>&nbsp;<b>Converting a trained <code>.pt</code> into a DevKit pack</b></summary>
 
 <br>
 
@@ -208,7 +213,7 @@ sima-vision detect --model https://example.com/my-model.tar.gz   # a URL works t
 
 ## Moving files
 
-![on your PC](https://img.shields.io/badge/run_on-Host_PC-457B9D?style=flat-square)
+![on your PC](https://img.shields.io/badge/run_on-Host_PC-64239E)
 
 Output lands beside the run, on the board, and both commands are typed on your PC. Name the board once and neither command needs
 `--host`:
