@@ -564,9 +564,13 @@ class BaseConfig:
         overflow_policy: ``auto``, ``keep_latest``, ``block`` or ``drop_incoming``.
         profile: Whether to print per-stage timings.
         profile_interval: Frames per profiling window.
-        save_enable: Whether to write annotated stills.
+        save_enable: Whether to write annotated stills. Off by default: the
+            annotated video is the output people want, and a run that also
+            dropped a still every 10 frames left a few hundred JPEGs per clip
+            beside it that nobody asked for and everybody then deleted.
+            ``--save``, ``--save-dir`` or ``--save-every`` turns them back on.
         save_dir: Directory for stills.
-        save_every: Write every Nth frame. 0 disables.
+        save_every: Write every Nth frame once stills are on. 0 disables.
         save_overlay: Whether stills carry the overlay.
         save_format: ``jpg`` or ``png``.
         video_enable: Whether to write an annotated video on the DevKit.
@@ -630,7 +634,7 @@ class BaseConfig:
     profile: bool = False
     profile_interval: int = 100
 
-    save_enable: bool = True
+    save_enable: bool = False
     save_dir: str = "frames"
     save_every: int = 10
     save_overlay: bool = True
@@ -764,7 +768,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         overflow_policy=_str(runtime, "overflow_policy", defaults.overflow_policy).lower(),
         profile=_bool(runtime, "profile", False),
         profile_interval=_int(runtime, "profile_interval", 100),
-        save_enable=_bool(save, "enable", True),
+        save_enable=_bool(save, "enable", False),
         save_dir=_str(save, "dir", defaults.save_dir),
         save_every=_int(save, "every", 10),
         save_overlay=_bool(save, "overlay", True),

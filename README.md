@@ -49,9 +49,12 @@ them needs no login and no `sima-cli`.
 
 | App | Fetched for you | Writes |
 |:--|:--|:--|
-| `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4`, `frames/` |
-| `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4`, `frames/` |
-| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `frames/`, `alerts/` |
+| `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4` |
+| `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4` |
+| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `alerts/` |
+
+The annotated video is the only thing written. Stills are off unless you ask for them
+with `--save`.
 
 <details>
 <summary>🎨 &nbsp;<b>Instance segmentation</b> &nbsp;·&nbsp; per-pixel masks, with an optional blur</summary>
@@ -105,9 +108,10 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--no-video` | all | Do not record |
 | `--video-encoder` | all | `sima` (hardware H.264, default) or `opencv` (software, about ten times slower) |
 | `--video-bitrate KBPS` | all | Target bitrate for the hardware encoder. Default `12000` |
-| `--save-dir DIR` | all | Where annotated stills are written |
-| `--save-every N` | all | Write every Nth still. Default `10`; `0` disables |
-| `--no-save` | all | Do not write stills |
+| `--save` | all | Also write annotated stills. Off by default, so only the video is written |
+| `--save-dir DIR` | all | Where annotated stills are written. Implies `--save` |
+| `--save-every N` | all | Write every Nth still. Default `10` once stills are on; implies `--save`. `0` disables |
+| `--no-save` | all | Do not write stills. Already the default; use it to override a config file |
 | `--no-hud` | all | Leave the frame-rate badge off the overlay |
 | `--hud-scale N` | all | Frame-rate badge font size. Default `1.3`; `0` follows the caption scale |
 | `--hud-thickness N` | all | Badge stroke weight. `0` follows the caption thickness |

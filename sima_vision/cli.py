@@ -220,16 +220,24 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         help="Target bitrate for the hardware encoder. Default 12000.",
     )
     out.add_argument(
+        "--save", dest="output.save.enable", action="store_const", const=True,
+        help="Also write annotated stills. Off by default: the video is the "
+             "output, and stills every 10 frames left hundreds of JPEGs beside "
+             "it that nobody asked for.",
+    )
+    out.add_argument(
         "--save-dir", dest="output.save.dir", metavar="DIR",
-        help="Where to write annotated stills.",
+        help="Where to write annotated stills. Implies --save.",
     )
     out.add_argument(
         "--save-every", dest="output.save.every", type=int, metavar="N",
-        help="Write every Nth still. Default 10; 0 disables.",
+        help="Write every Nth still. Default 10 once stills are on; implies "
+             "--save. 0 disables.",
     )
     out.add_argument(
         "--no-save", dest="output.save.enable", action="store_const", const=False,
-        help="Do not write stills.",
+        help="Do not write stills. The default, so this is only needed to "
+             "override a config file that turns them on.",
     )
     out.add_argument(
         "--no-hud", dest="output.video.hud", action="store_const", const=False,
@@ -463,12 +471,24 @@ def collect_overrides(args: argparse.Namespace) -> dict:
 
     ``None`` means the flag was not given, which is how an unset flag defers to
     the config file rather than overwriting it with an argparse default.
+
+    Asking where the stills go, or how often, is taken as asking for stills.
+    They are off by default, so on its own `--save-every 5` would be accepted
+    and write nothing -- and `--save-every 0` already carries that same
+    enable/disable sense in the other direction. An explicit `--no-save`
+    alongside either still wins, because it lands on the same key first.
     """
-    return {
+    overrides = {
         key: value
         for key, value in vars(args).items()
         if "." in key and value is not None
     }
+    asks_for_stills = overrides.get("output.save.every") or overrides.get(
+        "output.save.dir"
+    )
+    if asks_for_stills and "output.save.enable" not in overrides:
+        overrides["output.save.enable"] = True
+    return overrides
 
 
 class Narration:

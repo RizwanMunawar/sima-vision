@@ -292,3 +292,79 @@ def test_the_channel_order_matches_the_config_file():
     assert "BGR" in doc
     # Red is 0,0,255 in this order. If that ever flips, this is the canary.
     assert cli.bgr_colour("0,0,255") == [0, 0, 255]
+
+
+# -- stills are opt-in; the video is the output --
+
+def test_no_app_writes_stills_unless_asked():
+    """The annotated video is what people came for.
+
+    A run used to drop a still every 10 frames beside it, which on a 1080p clip
+    is a few hundred JPEGs nobody asked for and everybody then deleted. Asserted
+    across every app, because this is the kind of default that gets restored in
+    one task and not the others.
+    """
+    for name in TASKS:
+        cfg = TASKS[name]().load(
+            None, {"model.path": "m.tar.gz", "source.uri": "c.h264"}, use_file=False
+        )
+        assert cfg.save_enable is False, name
+        assert cfg.video_enable is True, name
+
+
+@pytest.mark.parametrize(
+    ("argv", "enabled"),
+    [
+        ([], None),                                   # not given: the file decides
+        (["--save"], True),
+        (["--save-every", "5"], True),                # asking the rate asks for stills
+        (["--save-dir", "shots"], True),              # so does asking where
+        (["--save-every", "0"], None),                # 0 disables via the rate
+        (["--save-every", "5", "--no-save"], False),  # an explicit no still wins
+        (["--no-save"], False),
+    ],
+)
+def test_asking_where_or_how_often_asks_for_stills(argv, enabled):
+    """`--save-every 5` on its own has to write something.
+
+    Stills are off by default, so the flag would otherwise be accepted and
+    change nothing -- and `--save-every 0` already carries that same
+    enable/disable sense in the other direction.
+    """
+    args = parse(["detect", *argv])
+    assert collect_overrides(args).get("output.save.enable") is enabled
+
+
+def test_save_every_zero_writes_nothing_even_where_stills_are_on():
+    """0 disables through the rate, so it does not need the enable flag too.
+
+    Which is why it is the one `--save-every` value that implies nothing: a
+    config file saying `enable: true` plus `--save-every 0` still writes no
+    stills, and leaving the flag alone keeps that readable.
+    """
+    from sima_vision.sinks import wants_jpeg
+
+    args = parse(["detect", "--save-every", "0"])
+    cfg = TASKS["detect"]().load(
+        Path(__file__).parent / "configs" / "detect.yaml", collect_overrides(args)
+    )
+    assert cfg.save_enable is True
+    assert not any(wants_jpeg(cfg, index) for index in range(50))
+
+
+def test_a_config_file_can_still_turn_stills_on():
+    """The default moved; the setting did not. An existing config keeps working."""
+    cfg = TASKS["detect"]().load(Path(__file__).parent / "configs" / "detect.yaml", {})
+    assert cfg.save_enable is True
+    assert cfg.save_every == 10
+
+
+def test_the_rate_survives_the_default_moving():
+    """`save_every` is the rate once stills are on, not a second off switch.
+
+    Zeroing it as well as the enable flag would have made `--save` alone write
+    nothing, which is the one thing that flag has to do.
+    """
+    args = parse(["detect", "--save"])
+    cfg = TASKS["detect"]().load(None, collect_overrides(args), use_file=False)
+    assert (cfg.save_enable, cfg.save_every) == (True, 10)
