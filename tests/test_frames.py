@@ -690,7 +690,7 @@ def test_zero_still_means_follow_the_caption():
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: The palette as it was specified, in the order it was given.
-PALETTE_HEX = ["240115", "05299E", "46237A", "080708"]
+PALETTE_HEX = ["042AFF", "05299E", "46237A", "080708"]
 
 
 def bgr_of(hex_rgb: str) -> tuple[int, int, int]:
@@ -713,7 +713,7 @@ def test_the_class_palette_is_the_one_that_was_specified():
 def test_class_colours_cycle_and_are_stable():
     from sima_vision.draw import CLASS_COLORS, class_color
 
-    assert class_color(0) == bgr_of("240115")
+    assert class_color(0) == bgr_of("042AFF")
     assert class_color(1) == bgr_of("05299E")
     assert class_color(len(CLASS_COLORS)) == class_color(0)
     assert class_color(79) == CLASS_COLORS[79 % len(CLASS_COLORS)]

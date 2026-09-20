@@ -13,12 +13,13 @@ from . import runtime
 # beside each entry because that is how it was chosen and how it will be
 # checked against a design again.
 #
-# Every one of these is dark -- the brightest sits at a relative luminance of
-# 0.038, the darkest at 0.0004 -- so the caption band carries the reading and
-# the box outline is a marker rather than the thing you read. Captions are
-# white on the same colour, which clears 19:1 on all four.
+# Three of these are dark enough that the caption band carries the reading and
+# the box outline is a marker rather than the thing you read; the first is a
+# full-strength blue that holds its own outline. Captions are white on the same
+# colour, which clears 7:1 on all four -- the bright one being the tight case,
+# at 7.7:1.
 CLASS_COLORS = [
-    (21, 1, 36),      # #240115
+    (255, 42, 4),     # #042AFF
     (158, 41, 5),     # #05299E
     (122, 35, 70),    # #46237A
     (8, 7, 8),        # #080708
