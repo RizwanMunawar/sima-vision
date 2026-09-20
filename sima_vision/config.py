@@ -383,7 +383,9 @@ class DrawConfig:
     banner_text_color: tuple[int, int, int] = (255, 255, 255)
 
     hud_text_color: tuple[int, int, int] = (255, 255, 255)
-    hud_bg_color: tuple[int, int, int] = (128, 0, 128)
+    # #17301C. BGR, like every colour here. White on it is 15:1, so the
+    # reading stays legible over whatever the frame is doing behind it.
+    hud_bg_color: tuple[int, int, int] = (28, 48, 23)
     # Derived, not typed: the badge is HUD_MULTIPLE times a caption, and
     # writing 2.4 and 6 here would quietly stop being true the first time
     # TEXT_SCALE moved. 0 still means "exactly the caption" for anyone who

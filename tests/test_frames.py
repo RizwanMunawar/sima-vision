@@ -396,21 +396,22 @@ def fill_pixels(img, colour) -> int:
     return int((corner == np.array(colour, np.uint8)).all(axis=2).sum())
 
 
-def test_the_badge_is_purple_and_larger_than_a_caption():
+def test_the_badge_is_dark_green_and_larger_than_a_caption():
     """Both are deliberate, so both are pinned.
 
     The badge is glanced at while the video plays rather than read, so it is
-    set a little above the caption scale. Purple because a black block reads as
-    part of the footage -- as a blown-out shadow or a letterbox bar -- while a
-    colour that does not occur in the scene reads as an overlay.
+    set above the caption scale. #17301C is dark enough to sit quietly over the
+    footage and still carries white text at 15:1, which is what the reading
+    needs to survive whatever is behind it.
     """
     draw = DrawConfig()
-    assert draw.hud_bg_color == (128, 0, 128)
+    assert draw.hud_bg_color == (28, 48, 23)       # #17301C as BGR
+    assert draw.hud_text_color == (255, 255, 255)
     assert draw.hud_text_scale > draw.text_scale
 
     img = np.full((1080, 1920, 3), 40, np.uint8)
     draw_fps(img, 24.0, draw)
-    assert fill_pixels(img, (128, 0, 128)) > 1000, "no purple badge was painted"
+    assert fill_pixels(img, (28, 48, 23)) > 1000, "no badge was painted"
 
 
 def test_the_badge_still_follows_the_caption_scale_when_asked_to():
@@ -682,3 +683,68 @@ def test_zero_still_means_follow_the_caption():
     # With no margin of its own, the badge falls back to its resolved padding,
     # which with hud_padding at 0 is the caption's.
     assert (left, top) == (draw.text_padding, draw.text_padding)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The class palette
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The palette as it was specified, in the order it was given.
+PALETTE_HEX = ["240115", "05299E", "46237A", "080708"]
+
+
+def bgr_of(hex_rgb: str) -> tuple[int, int, int]:
+    r, g, b = (int(hex_rgb[i:i + 2], 16) for i in (0, 2, 4))
+    return (b, g, r)
+
+
+def test_the_class_palette_is_the_one_that_was_specified():
+    """Written out in hex here, because that is how it will be checked again.
+
+    A BGR tuple in a test is unreadable next to a design; the conversion is the
+    part worth asserting, since reversing it silently swaps every box colour.
+    """
+    from sima_vision.draw import CLASS_COLORS
+
+    assert CLASS_COLORS == [bgr_of(h) for h in PALETTE_HEX]
+    assert len(set(CLASS_COLORS)) == len(CLASS_COLORS), "a repeat makes two classes look alike"
+
+
+def test_class_colours_cycle_and_are_stable():
+    from sima_vision.draw import CLASS_COLORS, class_color
+
+    assert class_color(0) == bgr_of("240115")
+    assert class_color(1) == bgr_of("05299E")
+    assert class_color(len(CLASS_COLORS)) == class_color(0)
+    assert class_color(79) == CLASS_COLORS[79 % len(CLASS_COLORS)]
+
+
+def test_white_captions_stay_legible_on_every_class_colour():
+    """The palette is dark by design, so the band carries the reading.
+
+    Which only works while the text clears it. Checked as a contrast ratio
+    rather than by eye, because a colour added later will not be.
+    """
+    from sima_vision.draw import CLASS_COLORS
+
+    def luminance(bgr):
+        b, g, r = (c / 255 for c in bgr)
+        return 0.2126 * r ** 2.2 + 0.7152 * g ** 2.2 + 0.0722 * b ** 2.2
+
+    text = DrawConfig().text_color
+    assert text == (255, 255, 255)
+    for color in CLASS_COLORS:
+        ratio = 1.05 / (luminance(color) + 0.05)
+        assert ratio > 7.0, f"white on {color} is only {ratio:.1f}:1"
+
+
+def test_boxes_and_masks_share_one_palette():
+    """detect draws boxes and segment draws masks, both off `class_color`.
+
+    Two lookups that happened to agree would drift; this pins that they are the
+    same function.
+    """
+    from sima_vision.draw import class_color as boxes_use
+    from sima_vision.tasks.segment import class_color as masks_use
+
+    assert boxes_use is masks_use

@@ -9,14 +9,19 @@ from __future__ import annotations
 
 from . import runtime
 
-# A 20-colour palette with even hue spacing and consistent saturation, so
-# neighbouring classes stay distinguishable and nothing vanishes against a
-# bright or dark frame. BGR, because that is what OpenCV expects.
+# The class palette, BGR because that is what OpenCV expects. Written as hex
+# beside each entry because that is how it was chosen and how it will be
+# checked against a design again.
+#
+# Every one of these is dark -- the brightest sits at a relative luminance of
+# 0.038, the darkest at 0.0004 -- so the caption band carries the reading and
+# the box outline is a marker rather than the thing you read. Captions are
+# white on the same colour, which clears 19:1 on all four.
 CLASS_COLORS = [
-    (56, 56, 255), (49, 210, 207), (10, 249, 72), (227, 195, 0), (255, 112, 132),
-    (144, 31, 255), (29, 178, 255), (49, 121, 255), (0, 194, 255), (98, 205, 0),
-    (185, 243, 52), (255, 156, 87), (255, 88, 178), (184, 61, 245), (86, 96, 255),
-    (0, 151, 255), (0, 229, 178), (146, 255, 51), (255, 194, 26), (255, 92, 92),
+    (21, 1, 36),      # #240115
+    (158, 41, 5),     # #05299E
+    (122, 35, 70),    # #46237A
+    (8, 7, 8),        # #080708
 ]
 
 # All digits share one vertical extent in this font, so folding them to a single
@@ -34,7 +39,7 @@ def class_color(class_id: int) -> tuple[int, int, int]:
         class_id: Model class id.
 
     Returns:
-        A BGR tuple, repeating every 20 classes.
+        A BGR tuple, repeating every :data:`CLASS_COLORS` entries.
     """
     return CLASS_COLORS[class_id % len(CLASS_COLORS)]
 
