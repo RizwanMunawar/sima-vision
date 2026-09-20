@@ -609,6 +609,12 @@ def test_the_bin_is_not_resolved_through_the_symlink(tmp_path):
 
 #: Prints, pauses long enough to count as silence, prints again, writes a pack.
 #: The pause is what a real compile does for minutes at a time in quantization.
+#:
+#: It waits for the reader to prove it is reading before pausing. Without that
+#: the whole run could finish before the parent reached its read loop -- a cold
+#: Windows runner spawning a python is easily slower than the pause -- and then
+#: every queued line arrives at once and no silence is ever observed. The test
+#: failed on exactly that, on one platform, some of the time.
 CHATTY_RECIPE = '''
 import argparse
 import pathlib
@@ -622,6 +628,12 @@ args = parser.parse_args()
 
 print("afe: importing the ONNX graph")
 sys.stderr.write("afe WARNING: operator Resize falls back to CVU" + chr(10))
+
+reading = pathlib.Path(args.build_dir) / "reading"
+deadline = time.time() + 10
+while not reading.exists() and time.time() < deadline:
+    time.sleep(0.01)
+
 time.sleep(0.35)
 print("afe: tessellating for the MLA")
 
@@ -645,9 +657,17 @@ def test_the_recipes_output_arrives_while_it_runs(tmp_path, monkeypatch):
 
     seen: list[str] = []
     quiet: list[float] = []
+
+    def note(line: str) -> None:
+        # on_line runs on the reading thread, so this file appearing is proof
+        # the parent is in its read loop. The recipe waits for it before
+        # pausing, which is what makes the pause land where it can be seen.
+        seen.append(line)
+        (build / "reading").touch()
+
     pack = export.run_recipe(
         make_recipe(tmp_path, CHATTY_RECIPE), onnx, build,
-        on_line=seen.append, on_silence=quiet.append,
+        on_line=note, on_silence=quiet.append,
     )
 
     assert pack.name == "best_mpk.tar.gz"
@@ -666,6 +686,9 @@ def test_every_line_is_kept_in_the_log(tmp_path):
     build.mkdir()
     onnx = tmp_path / "best-raw.onnx"
     onnx.write_bytes(b"onnx")
+    # This test wants the lines, not the pause between them, so the recipe's
+    # handshake is satisfied up front and it never waits.
+    (build / "reading").touch()
 
     export.run_recipe(make_recipe(tmp_path, CHATTY_RECIPE), onnx, build)
 
