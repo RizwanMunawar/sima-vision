@@ -887,3 +887,81 @@ def test_a_small_box_caption_no_longer_buries_its_larger_neighbour():
     edge = frame[310:890, 697:700]
     hits = (edge == np.array(class_color(1), np.uint8)).all(axis=2).any(axis=1)
     assert hits.all(), f"{(~hits).sum()} rows of the neighbour's box were covered"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The background blur never reaches the overlay
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def segment_render(blur: bool):
+    """One segment frame, rendered with the blur on or off."""
+    import types
+    from dataclasses import replace
+
+    from sima_vision.tasks import TASKS
+    from sima_vision.tasks.segment import SegmentRuntime
+
+    cfg = TASKS["segment"]().load(
+        None, {"model.path": "m", "source.uri": "c"}, use_file=False
+    )
+    cfg = replace(cfg, blur=replace(cfg.blur, enable=blur))
+
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    for y in range(0, 1080, 24):                     # fine checks: blur is obvious
+        for x in range(0, 1920, 24):
+            frame[y:y + 24, x:x + 24] = (
+                (210, 205, 195) if (x // 24 + y // 24) % 2 else (55, 60, 70)
+            )
+
+    mask = np.zeros((600, 400), bool)
+    mask[50:550, 40:360] = True
+    inst = Instance(box={"class_id": 0, "score": 0.9}, x1=300, y1=300, x2=700, y2=900,
+                    mask=mask, keep=True)
+    pipeline = types.SimpleNamespace(labels=["person"])
+    return SegmentRuntime().render(cfg, pipeline, frame, [inst], 27.0)
+
+
+def test_the_blur_is_on_by_default():
+    """`sima-vision segment` blurs. The README said "optional" for a while."""
+    from sima_vision.tasks import TASKS
+
+    cfg = TASKS["segment"]().load(
+        None, {"model.path": "m", "source.uri": "c"}, use_file=False
+    )
+    assert cfg.blur.enable is True
+
+
+def test_the_blur_softens_the_background_and_leaves_the_subject_sharp():
+    """Measured as local variance: a blurred checkerboard has almost none."""
+    blurred, plain = segment_render(True), segment_render(False)
+
+    def detail(img, y, x):
+        patch = img[y:y + 120, x:x + 120].astype(np.float32)
+        return float(patch.std())
+
+    assert detail(blurred, 60, 1500) < detail(plain, 60, 1500) * 0.5, "background not blurred"
+    # Inside the mask, well clear of the feathered edge.
+    assert detail(blurred, 500, 420) > detail(plain, 500, 420) * 0.9, "subject was blurred too"
+
+
+def test_the_overlay_is_identical_whether_the_blur_ran_or_not():
+    """The blur composites the image; the overlay is drawn after it.
+
+    So the badge, the captions and the outlines are the same pixels either way.
+    The mask tint is deliberately excluded -- it is translucent, so it takes the
+    colour of whatever it sits on, which is the whole point of it.
+    """
+    blurred, plain = segment_render(True), segment_render(False)
+    draw = DrawConfig()
+
+    # Every pixel the overlay paints opaquely: the badge fill, the caption
+    # band, the box outline and the ink on them. Located by colour rather than
+    # by slice, so the test does not have to know where they landed.
+    opaque = np.zeros(plain.shape[:2], bool)
+    for color in (draw.hud_bg_color, draw.hud_text_color, class_color(0), (255, 255, 255)):
+        opaque |= (plain == np.array(color, np.uint8)).all(axis=2)
+    assert opaque.sum() > 20_000, "found no overlay to compare"
+
+    differing = (blurred[opaque] != plain[opaque]).any(axis=1).sum()
+    assert differing == 0, f"the blur reached {differing} overlay pixels"

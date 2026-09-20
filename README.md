@@ -64,14 +64,15 @@ The annotated video is the only thing written. Stills are off unless you ask for
 with `--save`.
 
 <details>
-<summary>&nbsp;<b>Instance segmentation</b> &nbsp;·&nbsp; per-pixel masks, with an optional blur</summary>
+<summary>&nbsp;<b>Instance segmentation</b> &nbsp;·&nbsp; per-pixel masks, with the background blurred</summary>
 
 <br>
 
 ```bash
-sima-vision segment
-sima-vision segment --blur
-sima-vision segment --blur --keep-classes person
+sima-vision segment                        # background blurred, instances sharp
+sima-vision segment --keep-classes person  # only people stay sharp
+sima-vision segment --anonymise            # the other way round: blur the people
+sima-vision segment --no-blur              # a plain overlay, nothing blurred
 ```
 
 </details>
@@ -137,7 +138,7 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--decoder-buffers N` | all | Buffers to ask the decoder for. Default `0`, sized from the stream's reference frames |
 | `--decoder-tuning` | all | Hardware decoder preset. Default `default`, which keeps every frame; `auto` drops frames in bursts |
 | `--segment-frames N` | all | Frames per piece when a clip is too long for one decode. Default `150`; `0` runs it whole |
-| `--blur` / `--no-blur` | `segment` | Blur the background and keep instances sharp, or draw a plain overlay |
+| `--blur` / `--no-blur` | `segment` | Blur the background and keep instances sharp. On by default; `--no-blur` draws a plain overlay |
 | `--blur-method` | `segment` | `gaussian`, `pixelate` or `none`. Default `gaussian` |
 | `--blur-strength PX` | `segment` | Gaussian kernel width at 1080p. Default `41` |
 | `--keep-classes CLASS...` | `segment` | Names or ids that stay sharp. Default: every detected class |

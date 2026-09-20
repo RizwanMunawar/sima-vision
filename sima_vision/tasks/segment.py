@@ -603,11 +603,13 @@ class SegmentTask(Task):
     def add_arguments(self, parser) -> None:
         parser.add_argument(
             "--blur", dest="blur.enable", action="store_const", const=True,
-            help="Blur the background and keep the instances sharp.",
+            help="Blur the background and keep the instances sharp. On by default, "
+                 "so this is only needed to override a config file that turns it off.",
         )
         parser.add_argument(
             "--no-blur", dest="blur.enable", action="store_const", const=False,
-            help="Draw a plain segmentation overlay with no background treatment.",
+            help="Draw a plain segmentation overlay with no background treatment. "
+                 "The blur is on by default; this is how you turn it off.",
         )
         parser.add_argument(
             "--blur-method", dest="blur.method", choices=("gaussian", "pixelate", "none"),
