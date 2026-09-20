@@ -262,7 +262,7 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     out.add_argument(
         "--hud-bg", dest="visualization.hud.bg_color", type=bgr_colour,
         metavar="B,G,R",
-        help="Badge fill colour, as B,G,R. Default 28,48,23 (#17301C).",
+        help="Badge fill colour, as B,G,R. Default 132,28,193 (#C11C84).",
     )
     out.add_argument(
         "--hud-color", dest="visualization.hud.text_color", type=bgr_colour,

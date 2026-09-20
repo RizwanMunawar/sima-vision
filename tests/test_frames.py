@@ -396,22 +396,34 @@ def fill_pixels(img, colour) -> int:
     return int((corner == np.array(colour, np.uint8)).all(axis=2).sum())
 
 
-def test_the_badge_is_dark_green_and_larger_than_a_caption():
+def test_the_badge_is_magenta_and_larger_than_a_caption():
     """Both are deliberate, so both are pinned.
 
     The badge is glanced at while the video plays rather than read, so it is
-    set above the caption scale. #17301C is dark enough to sit quietly over the
-    footage and still carries white text at 15:1, which is what the reading
-    needs to survive whatever is behind it.
+    set above the caption scale. #C11C84 occurs in almost no real scene, which
+    is what makes it read as an overlay rather than as part of the footage.
     """
     draw = DrawConfig()
-    assert draw.hud_bg_color == (28, 48, 23)       # #17301C as BGR
+    assert draw.hud_bg_color == (132, 28, 193)     # #C11C84 as BGR
     assert draw.hud_text_color == (255, 255, 255)
     assert draw.hud_text_scale > draw.text_scale
 
     img = np.full((1080, 1920, 3), 40, np.uint8)
     draw_fps(img, 24.0, draw)
-    assert fill_pixels(img, (28, 48, 23)) > 1000, "no badge was painted"
+    assert fill_pixels(img, (132, 28, 193)) > 1000, "no badge was painted"
+
+
+def test_white_stays_readable_on_the_badge():
+    """5.6:1. Large text needs 4.5:1, and the badge is deliberately large.
+
+    Worth pinning rather than leaving to taste: the badge is the one thing on
+    the frame that is not about the picture, so a fill that swallows its own
+    text makes it decoration.
+    """
+    draw = DrawConfig()
+    b, g, r = (c / 255 for c in draw.hud_bg_color)
+    lum = 0.2126 * r ** 2.2 + 0.7152 * g ** 2.2 + 0.0722 * b ** 2.2
+    assert 1.05 / (lum + 0.05) > 4.5
 
 
 def test_the_badge_still_follows_the_caption_scale_when_asked_to():
