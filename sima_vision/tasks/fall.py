@@ -958,14 +958,15 @@ class FallRuntime(TaskRuntime):
     def render(self, cfg: FallAppConfig, pipeline: FallPipeline, frame, results, fps: float):
         """Draw once per frame and share the result between the video and JPEG sinks."""
         annotated = frame.copy()
-        # FPS first, so a track in the top-left corner is never hidden by it.
-        if cfg.video_hud:
-            draw_fps(annotated, fps, cfg.draw)
         draw_tracks(annotated, results, cfg.draw, cfg.fall, pipeline.labels)
         down = [t for t in results if t.state == FALLEN]
         if cfg.draw.banner and down:
             ids = ", ".join(f"#{t.track_id}" for t in down)
             draw_banner(annotated, f"FALL DETECTED - track {ids}", cfg.draw)
+        # FPS last, after the banner as well as the tracks. See
+        # DetectRuntime.render.
+        if cfg.video_hud:
+            draw_fps(annotated, fps, cfg.draw)
         return annotated
 
     def metadata(self, pipeline: FallPipeline, results) -> list[dict]:

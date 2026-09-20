@@ -567,10 +567,11 @@ class SegmentRuntime(TaskRuntime):
             annotated = composite(frame, foreground_mask(results, frame.shape), cfg.blur, scale)
         else:
             annotated = frame.copy()
-        # FPS first, so an instance in the top-left corner is never hidden by it.
+        draw_instances(annotated, results, pipeline.labels, cfg.draw)
+        # FPS last, so neither a caption nor a mask lands on top of it. See
+        # DetectRuntime.render.
         if cfg.video_hud:
             draw_fps(annotated, fps, cfg.draw)
-        draw_instances(annotated, results, pipeline.labels, cfg.draw)
         return annotated
 
     def metadata(self, pipeline: SegmentPipeline, results) -> list[dict]:

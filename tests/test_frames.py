@@ -437,3 +437,96 @@ def test_overlay_survives_any_frame_size(size):
     draw_boxes(img, boxes, ["a", "b", "c"], DrawConfig())
     draw_fps(img, 30.0, DrawConfig())
     assert img.shape == (*size, 3)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The badge is the last thing drawn
+# ─────────────────────────────────────────────────────────────────────────────
+
+BADGE_FPS = 24.0
+
+
+def render_case(app: str):
+    """One app's runtime, config, pipeline stub and results, ready to render.
+
+    Every box sits in the top-left corner, over the badge, because that is the
+    one position where the drawing order shows.
+    """
+    import types
+
+    from sima_vision.tasks import TASKS
+
+    cfg = TASKS[app]().load(
+        None, {"model.path": "m.tar.gz", "source.uri": "c.h264"}, use_file=False
+    )
+    pipeline = types.SimpleNamespace(labels=["person", "bike", "car"])
+    box = {"x1": 0.0, "y1": 0.0, "x2": 420.0, "y2": 300.0,
+           "score": 0.93, "class_id": 0}
+
+    if app == "detect":
+        from sima_vision.tasks.detect import DetectRuntime
+
+        return DetectRuntime(), cfg, pipeline, [box]
+    if app == "segment":
+        from sima_vision.tasks.segment import SegmentRuntime
+
+        instance = Instance(
+            box=box, x1=0, y1=0, x2=420, y2=300,
+            mask=np.ones((300, 420), dtype=bool), keep=True,
+        )
+        return SegmentRuntime(), cfg, pipeline, [instance]
+    from sima_vision.tasks.fall import FALLEN, FallRuntime, Track
+
+    # FALLEN, so the banner is drawn too: the badge has to come after that as
+    # well, not merely after the boxes.
+    return FallRuntime(), cfg, pipeline, [Track(track_id=1, box=box, state=FALLEN)]
+
+
+@pytest.mark.parametrize("app", ["detect", "segment", "fall"])
+def test_the_fps_badge_is_never_drawn_over(app):
+    """Rendering with the HUD on must equal rendering without it, then stamping
+    the badge on by hand.
+
+    Which is only true if the badge is the very last thing the app draws. Every
+    app used to draw it first, so a detection in the top-left corner put its
+    caption straight through the frame rate -- and the badge is the one reading
+    on the frame that is not about the picture.
+
+    Asserted per app rather than by reading the source, because three separate
+    render methods is three chances to put it back.
+    """
+    import dataclasses
+
+    runtime, cfg, pipeline, results = render_case(app)
+    frame = np.full((1080, 1920, 3), 40, np.uint8)
+
+    with_hud = runtime.render(cfg, pipeline, frame, results, BADGE_FPS)
+
+    without_hud = runtime.render(
+        dataclasses.replace(cfg, video_hud=False), pipeline, frame, results, BADGE_FPS
+    )
+    draw_fps(without_hud, BADGE_FPS, cfg.draw)
+
+    assert np.array_equal(with_hud, without_hud), (
+        f"{app} draws something over the FPS badge"
+    )
+
+
+@pytest.mark.parametrize("app", ["detect", "segment", "fall"])
+def test_every_pixel_of_the_badge_survives_a_box_on_top_of_it(app):
+    """The same thing said in pixels, so a failure names what was lost.
+
+    A caption over the badge changed a few hundred pixels out of forty
+    thousand, which is easy to miss in a screenshot and easy to assert on.
+    """
+    runtime, cfg, pipeline, results = render_case(app)
+    frame = np.full((1080, 1920, 3), 40, np.uint8)
+
+    badge = frame.copy()
+    draw_fps(badge, BADGE_FPS, cfg.draw)
+    painted = (badge != frame).any(axis=2)
+    assert painted.sum() > 1000, "no badge to test against"
+
+    rendered = runtime.render(cfg, pipeline, frame, results, BADGE_FPS)
+    lost = int((rendered[painted] != badge[painted]).any(axis=1).sum())
+    assert lost == 0, f"{app} overwrote {lost} of {int(painted.sum())} badge pixels"

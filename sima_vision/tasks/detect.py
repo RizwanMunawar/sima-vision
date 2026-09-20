@@ -42,10 +42,13 @@ class DetectRuntime(TaskRuntime):
     def render(self, cfg, pipeline: Pipeline, frame, results, fps: float):
         """Draw once per frame and share the result between the video and JPEG sinks."""
         annotated = frame.copy()
-        # FPS first, so a detection in the top-left corner is never hidden by it.
+        draw_boxes(annotated, results, pipeline.labels, cfg.draw)
+        # FPS last, so nothing is ever drawn over it. Drawn first, a detection
+        # in the top-left corner buried the badge under its caption -- and the
+        # badge is the one reading on the frame that is not about the picture,
+        # so it is the one that has to stay legible.
         if cfg.video_hud:
             draw_fps(annotated, fps, cfg.draw)
-        draw_boxes(annotated, results, pipeline.labels, cfg.draw)
         return annotated
 
     def metadata(self, pipeline: Pipeline, results) -> list[dict]:
