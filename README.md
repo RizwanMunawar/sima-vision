@@ -1,7 +1,9 @@
 <div align="center">
 
 <img src="assets/sima-devkit-docs-logo-home.png" alt="sima-vision: live YOLO computer vision on a SiMa Modalix DevKit 3.0">
+</div>
 
+<div align="center">
 <br>
 
 [![SiMa.ai](https://img.shields.io/badge/SiMa.ai-Modalix_DevKit_3.0-E63946)](https://sima.ai)
@@ -11,11 +13,8 @@
 [![CI](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml/badge.svg)](https://github.com/RizwanMunawar/sima-projects/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/pip_install-sima--vision-3775A9&logo=pypi&logoColor=white)](https://pypi.org/project/sima-vision/)
 [![Python](https://img.shields.io/badge/python-3.10+-3776AB&logo=python&logoColor=white)](https://www.python.org/)
-
 [![License](https://img.shields.io/badge/license-Apache--2.0-6C757D)](LICENSE)
 [![YOLO26](https://img.shields.io/badge/Ultralytics-YOLO26-FFB703&labelColor=333)](https://github.com/ultralytics/ultralytics)
-
-
 </div>
 
 **Computer vision applications on the SiMa.ai Modalix DevKit 3.0.** Object detection,
