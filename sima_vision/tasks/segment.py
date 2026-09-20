@@ -581,7 +581,7 @@ class SegmentRuntime(TaskRuntime):
 # Task
 # ─────────────────────────────────────────────────────────────────────────────
 
-SEGMENT_DRAW = DrawConfig(box_thickness=2, centre_dot=False, banner=False)
+SEGMENT_DRAW = DrawConfig(box_thickness=2, centre_dot=False)
 
 
 class SegmentTask(Task):

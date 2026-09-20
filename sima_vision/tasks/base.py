@@ -101,7 +101,7 @@ class Task:
         """Let one flag imply another before the overrides are applied.
 
         Override to express things like "naming a recipient means you want
-        alerts on". Returns the dict to apply; mutating and returning the
+        blur on". Returns the dict to apply; mutating and returning the
         argument is fine.
         """
         return overrides

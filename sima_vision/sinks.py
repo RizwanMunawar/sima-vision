@@ -24,7 +24,7 @@ from .samples import FrameStamp
 class Pipeline:
     """Everything a running pipeline owns, so teardown has one place to look.
 
-    Tasks subclass this to add their own state -- the tracker and alert sender
+    Tasks subclass this to add their own state -- the tracker
     for ``fall``, the mask bookkeeping for ``segment`` -- and inherit
     :meth:`close`, which is what guarantees the MLA is released even when a run
     ends on an exception.

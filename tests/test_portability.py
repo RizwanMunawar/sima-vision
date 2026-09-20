@@ -30,7 +30,7 @@ OFFBOARD = [
     ["detect", "--no-config", "--validate"],
     ["segment", "--no-config", "--validate"],
     ["fall", "--no-config", "--validate"],
-    ["fall", "--no-config", "--alert-to", "ops@example.com", "--test-alert"],
+    ["fall", "--no-config", "--model", "m.tar.gz", "--source", "c.h264", "--validate"],
     ["detect", "--no-config", "--validate", "--quiet"],
     ["push", "--help"],
     ["pull", "--help"],

@@ -292,9 +292,9 @@ class DrawConfig:
     """Overlay appearance, straight from the ``visualization`` config section.
 
     This is the union of what all three tasks draw. A task simply ignores the
-    fields it has no use for -- ``detect`` never reads ``mask_alpha``, ``segment``
-    never reads ``banner`` -- which is cheaper than three near-identical
-    dataclasses and means one ``visualization`` block documents them all. The
+    fields it has no use for -- ``detect`` never reads ``mask_alpha`` -- which is
+    cheaper than three near-identical dataclasses and means one
+    ``visualization`` block documents them all. The
     few defaults that genuinely differ per task are supplied through
     :attr:`TaskDefaults.draw`.
 
@@ -324,13 +324,6 @@ class DrawConfig:
         show_boxes: ``segment``: whether to draw the bounding rectangle as well.
             Off by default: the mask already shows the extent.
         show_track_ids: ``fall``: whether captions carry the track id.
-        banner: ``fall``: whether to draw the full-width alert strip.
-        banner_text_scale: Banner font scale. 0 follows ``text_scale``.
-        banner_text_thickness: Banner stroke. 0 follows ``text_thickness``.
-        banner_padding: Gap between banner text and the strip edge.
-        banner_alpha: Strip opacity, 0.0 to 1.0.
-        banner_bg_color: Strip fill, BGR.
-        banner_text_color: Strip text, BGR.
         hud_text_color: Frame-rate badge text colour, BGR.
         hud_bg_color: Frame-rate badge fill colour, BGR. Purple by default,
             which reads as an overlay rather than as part of the footage the
@@ -374,13 +367,6 @@ class DrawConfig:
     show_boxes: bool = False
 
     show_track_ids: bool = True
-    banner: bool = True
-    banner_text_scale: float = 0.0
-    banner_text_thickness: int = 0
-    banner_padding: int = 18
-    banner_alpha: float = 0.75
-    banner_bg_color: tuple[int, int, int] = (56, 56, 255)
-    banner_text_color: tuple[int, int, int] = (255, 255, 255)
 
     hud_text_color: tuple[int, int, int] = (255, 255, 255)
     # #C11C84. BGR, like every colour here. White on it is 5.6:1 -- past the
@@ -423,7 +409,6 @@ def load_draw_config(raw: dict, default: DrawConfig | None = None) -> DrawConfig
     """
     section = _section(raw, "visualization")
     hud = _section(section, "hud")
-    banner = _section(section, "banner")
     default = default or DrawConfig()
     return DrawConfig(
         box_thickness=_int(section, "box_thickness", default.box_thickness),
@@ -445,13 +430,6 @@ def load_draw_config(raw: dict, default: DrawConfig | None = None) -> DrawConfig
         show_track_ids=(
             _flag(section, "show_track_ids", "on" if default.show_track_ids else "off") == "on"
         ),
-        banner=_flag(banner, "enable", "on" if default.banner else "off") == "on",
-        banner_text_scale=_float(banner, "text_scale", default.banner_text_scale),
-        banner_text_thickness=_int(banner, "text_thickness", default.banner_text_thickness),
-        banner_padding=_int(banner, "padding", default.banner_padding),
-        banner_alpha=_float(banner, "alpha", default.banner_alpha),
-        banner_bg_color=_color(banner, "bg_color", default.banner_bg_color),
-        banner_text_color=_color(banner, "text_color", default.banner_text_color),
         hud_text_color=_color(hud, "text_color", default.hud_text_color),
         hud_bg_color=_color(hud, "bg_color", default.hud_bg_color),
         hud_text_scale=_float(hud, "text_scale", default.hud_text_scale),

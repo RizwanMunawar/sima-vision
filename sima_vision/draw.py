@@ -1,4 +1,4 @@
-"""Overlay drawing: palette, text metrics, boxes, the HUD badge and the banner.
+"""Overlay drawing: palette, text metrics, boxes and the HUD badge.
 
 Sizes in :class:`~sima_vision.config.DrawConfig` are expressed for a 1080p
 frame and multiplied by :func:`draw_scale`, so a config tuned on a test clip
@@ -317,36 +317,3 @@ def draw_fps(frame, fps: float, draw) -> None:
     )
 
 
-def draw_banner(frame, text: str, draw) -> None:
-    """Draw a full-width alert strip across the bottom of the frame.
-
-    A red box around one person is easy to miss on a wall of camera tiles. A
-    band across the whole frame is not, which is the point of it.
-
-    Args:
-        frame: BGR image, modified in place.
-        text: Banner text.
-        draw: Visualization settings.
-    """
-    cv2, np = runtime.cv2, runtime.np
-    height, width = frame.shape[:2]
-    scale = draw_scale(frame, draw)
-    text_scale = (draw.banner_text_scale or draw.text_scale) * scale
-    text_thickness = max(1, int(round((draw.banner_text_thickness or draw.text_thickness) * scale)))
-    pad = max(4, int(round(draw.banner_padding * scale)))
-
-    (text_w, _), _ = cv2.getTextSize(text, runtime.FONT, text_scale, text_thickness)
-    above, below = text_ink_extent(text, text_scale, text_thickness)
-    band_h = above + below + pad * 2
-    top = height - band_h
-
-    strip = frame[top:height, 0:width]
-    tint = np.empty_like(strip)
-    tint[:] = draw.banner_bg_color
-    # Translucent rather than solid, so the band never hides the thing it is
-    # drawing attention to.
-    cv2.addWeighted(tint, draw.banner_alpha, strip, 1.0 - draw.banner_alpha, 0.0, dst=strip)
-    cv2.putText(
-        frame, text, (max(pad, (width - text_w) // 2), top + pad + above),
-        runtime.FONT, text_scale, draw.banner_text_color, text_thickness, cv2.LINE_AA,
-    )

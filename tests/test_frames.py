@@ -15,7 +15,6 @@ from sima_vision.config import DrawConfig
 from sima_vision.draw import (
     caption_text,
     class_color,
-    draw_banner,
     draw_boxes,
     draw_caption,
     draw_fps,
@@ -435,14 +434,6 @@ def test_the_badge_still_follows_the_caption_scale_when_asked_to():
     assert fill_pixels(img, (7, 8, 9)) > 1000
 
 
-def test_draw_banner_covers_the_bottom_strip():
-    img = frame()
-    before = img.copy()
-    draw_banner(img, "FALL DETECTED - track #1", DrawConfig())
-    assert np.array_equal(img[0:100], before[0:100])       # top untouched
-    assert not np.array_equal(img[-30:], before[-30:])     # bottom strip painted
-
-
 @pytest.mark.parametrize("size", [(120, 160), (1080, 1920)])
 def test_overlay_survives_any_frame_size(size):
     img = np.full((*size, 3), 40, np.uint8)
@@ -473,7 +464,8 @@ def render_case(app: str):
     cfg = TASKS[app]().load(
         None, {"model.path": "m.tar.gz", "source.uri": "c.h264"}, use_file=False
     )
-    pipeline = types.SimpleNamespace(labels=["person", "bike", "car"])
+    pipeline = types.SimpleNamespace(labels=["person", "bike", "car"],
+                                     fall_class_ids=None)
     box = {"x1": 0.0, "y1": 0.0, "x2": 420.0, "y2": 300.0,
            "score": 0.93, "class_id": 0}
 
@@ -491,8 +483,7 @@ def render_case(app: str):
         return SegmentRuntime(), cfg, pipeline, [instance]
     from sima_vision.tasks.fall import FALLEN, FallRuntime, Track
 
-    # FALLEN, so the banner is drawn too: the badge has to come after that as
-    # well, not merely after the boxes.
+    # FALLEN, so the box is the relabelled one.
     return FallRuntime(), cfg, pipeline, [Track(track_id=1, box=box, state=FALLEN)]
 
 

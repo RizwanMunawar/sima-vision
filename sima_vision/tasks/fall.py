@@ -1,4 +1,4 @@
-"""Fall detection: track people, judge whether one has gone down, email about it.
+"""Fall detection: track people and judge whether one has gone down.
 
 Three signals, all available from a plain bounding box:
 
@@ -12,34 +12,28 @@ Three signals, all available from a plain bounding box:
 
 Any one of them can fire spuriously for a frame or two, so nothing is reported
 until the condition has held for ``fall.confirm_seconds``. That delay is the
-whole difference between a useful alert and one nobody reads.
+whole difference between a signal worth reading and one nobody trusts.
+
+The frame this draws is the one ``detect`` draws -- the same palette, the same
+boxes, the same captions. A fall changes the class a box is labelled with, and
+nothing else.
 """
 
 from __future__ import annotations
 
-import os
-import queue
-import smtplib
-import threading
-import time
-from dataclasses import dataclass, field, replace
-from email.message import EmailMessage
-from pathlib import Path
+from dataclasses import dataclass, field
 
-from .. import runtime
 from ..config import (
     BaseConfig,
-    DrawConfig,
     TaskDefaults,
     _flag,
     _float,
     _int,
     _section,
-    _str,
     _str_list,
 )
 from ..console import console
-from ..draw import class_color, draw_banner, draw_caption, draw_fps, draw_scale
+from ..draw import CLASS_COLORS, class_color, draw_boxes, draw_fps
 from ..runloop import TaskRuntime
 from ..samples import (
     extract_bbox_payload,
@@ -51,15 +45,13 @@ from ..samples import (
 )
 from ..sinks import Pipeline, load_labels
 from .base import Task
+from .detect import DETECT_DRAW
 
 UPRIGHT, FALLING, FALLEN, RECOVERING = "upright", "falling", "fallen", "recovering"
 
-#: The class a fallen track is relabelled to, and the colour that class draws
-#: in. Red rather than a palette entry: every other box on the frame is an
-#: ordinary detection, and this one is the reason the app exists. It is the
-#: banner's default fill, so the box and the strip across the bottom agree.
+#: The name a fallen track's box is captioned with. Not a colour: the box
+#: takes a palette colour like every other class. See :func:`fall_class_id`.
 FALL_CLASS = "FALL"
-FALL_COLOR = (56, 56, 255)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,11 +103,11 @@ class FallConfig:
             as a fraction of frame height per second. 0.55 is roughly half the
             frame in one second.
         descent_window: How far back to measure that speed, in seconds.
-        confirm_seconds: How long a signal must hold before an alert fires.
-            The single most important knob here: too low and a bending forklift
-            driver pages someone, too high and the alert is late.
+        confirm_seconds: How long a signal must hold before a track is called
+            fallen. The single most important knob here: too low and a bending
+            forklift driver is reported, too high and the report is late.
         recover_seconds: How long someone must look upright again before the
-            track is re-armed for another alert.
+            track is re-armed.
         min_box_height: Ignore boxes shorter than this fraction of the frame,
             which drops distant figures too small to judge.
     """
@@ -131,65 +123,11 @@ class FallConfig:
 
 
 @dataclass(frozen=True)
-class AlertConfig:
-    """SMTP notification settings.
-
-    There is no password field on purpose. ``config.yaml`` is committed, so a
-    password in it is a password on GitHub. The password is read from the
-    environment variable named by ``password_env`` instead.
-
-    Attributes:
-        enable: Whether to send anything at all.
-        dry_run: Compose and log the message without connecting to a server.
-            The way to check subject, recipients and attachment wiring.
-        host: SMTP server hostname.
-        port: SMTP port. 587 for STARTTLS, 465 for implicit SSL, 25 for a relay.
-        ssl: Connect with implicit TLS, for port 465.
-        starttls: Upgrade a plaintext connection, for port 587.
-        username: SMTP login. Empty means an unauthenticated relay.
-        password_env: Environment variable holding the password.
-        sender: ``From`` address.
-        recipients: ``To`` addresses.
-        subject: Subject template. ``{label}``, ``{track_id}``, ``{time}`` and
-            ``{site}`` are substituted.
-        site: A human name for this camera or building, put in the subject and
-            the body so an alert says where to go.
-        cooldown_seconds: Minimum gap between alerts, across every track. A
-            person falling usually produces one event; a camera pointed at a
-            busy aisle should not produce forty.
-        attach_snapshot: Whether to attach the annotated frame.
-        snapshot_dir: Where snapshots are written on the DevKit.
-        queue_depth: Pending alerts held for the sender thread. Beyond this,
-            alerts are dropped rather than blocking the pipeline.
-        timeout: SMTP socket timeout in seconds.
-    """
-
-    enable: bool = False
-    dry_run: bool = True
-    host: str = "smtp.gmail.com"
-    port: int = 587
-    ssl: bool = False
-    starttls: bool = True
-    username: str = ""
-    password_env: str = "FALL_ALERT_SMTP_PASSWORD"
-    sender: str = ""
-    recipients: tuple[str, ...] = ()
-    subject: str = "[{site}] Fall detected - track #{track_id} at {time}"
-    site: str = "Warehouse camera 1"
-    cooldown_seconds: float = 60.0
-    attach_snapshot: bool = True
-    snapshot_dir: str = "alerts"
-    queue_depth: int = 8
-    timeout: float = 20.0
-
-
-@dataclass(frozen=True)
 class FallAppConfig(BaseConfig):
-    """Base config plus the ``tracking``, ``fall`` and ``alerts`` sections."""
+    """Base config plus the ``tracking`` and ``fall`` sections."""
 
     track: TrackConfig = TrackConfig()
     fall: FallConfig = FallConfig()
-    alerts: AlertConfig = AlertConfig()
 
 
 def load_track_config(raw: dict) -> TrackConfig:
@@ -220,31 +158,6 @@ def load_fall_config(raw: dict) -> FallConfig:
     )
 
 
-def load_alert_config(raw: dict) -> AlertConfig:
-    section = _section(raw, "alerts")
-    smtp = _section(section, "smtp")
-    d = AlertConfig()
-    return AlertConfig(
-        enable=_flag(section, "enable", "off") == "on",
-        dry_run=_flag(section, "dry_run", "on") == "on",
-        host=_str(smtp, "host", d.host),
-        port=_int(smtp, "port", d.port),
-        ssl=_flag(smtp, "ssl", "off") == "on",
-        starttls=_flag(smtp, "starttls", "on") == "on",
-        username=_str(smtp, "username", d.username),
-        password_env=_str(smtp, "password_env", d.password_env),
-        timeout=_float(smtp, "timeout", d.timeout),
-        sender=_str(section, "from", d.sender),
-        recipients=_str_list(section, "to", d.recipients),
-        subject=_str(section, "subject", d.subject),
-        site=_str(section, "site", d.site),
-        cooldown_seconds=_float(section, "cooldown_seconds", d.cooldown_seconds),
-        attach_snapshot=_flag(section, "attach_snapshot", "on") == "on",
-        snapshot_dir=_str(section, "snapshot_dir", d.snapshot_dir),
-        queue_depth=_int(section, "queue_depth", d.queue_depth),
-    )
-
-
 def validate_fall(cfg: FallAppConfig) -> None:
     if not 0.0 <= cfg.track.iou_threshold <= 1.0:
         raise ValueError("tracking.iou_threshold must be in [0.0, 1.0]")
@@ -272,24 +185,6 @@ def validate_fall(cfg: FallAppConfig) -> None:
         raise ValueError("fall.recover_seconds must be >= 0")
     if not 0.0 <= cfg.fall.min_box_height < 1.0:
         raise ValueError("fall.min_box_height must be in [0.0, 1.0)")
-    if cfg.alerts.enable and not cfg.alerts.dry_run:
-        if not cfg.alerts.host:
-            raise ValueError("alerts.smtp.host must be set when alerts are enabled")
-        if not cfg.alerts.sender:
-            raise ValueError("alerts.from must be set when alerts are enabled")
-        if not cfg.alerts.recipients:
-            raise ValueError("alerts.to must list at least one recipient")
-        if cfg.alerts.ssl and cfg.alerts.starttls:
-            raise ValueError(
-                "alerts.smtp.ssl and starttls are both on. Use ssl for port 465 "
-                "or starttls for port 587, not both."
-            )
-        if not cfg.alerts.password_env:
-            raise ValueError("alerts.smtp.password_env must name an environment variable")
-    if cfg.alerts.queue_depth < 1:
-        raise ValueError("alerts.queue_depth must be >= 1")
-    if cfg.alerts.cooldown_seconds < 0:
-        raise ValueError("alerts.cooldown_seconds must be >= 0")
 
 
 def describe_fall(cfg: FallAppConfig) -> str:
@@ -300,23 +195,6 @@ def describe_fall(cfg: FallAppConfig) -> str:
         f"fall: watching {watched} | aspect>={cfg.fall.aspect_ratio} "
         f"height<={cfg.fall.height_drop:.0%} descent>={cfg.fall.descent_rate:.0%}/s "
         f"| confirm={cfg.fall.confirm_seconds}s recover={cfg.fall.recover_seconds}s"
-    )
-
-
-def describe_alerts(cfg: FallAppConfig) -> str:
-    a = cfg.alerts
-    if not a.enable:
-        return "alerts: off"
-    if a.dry_run:
-        return (
-            f"alerts: DRY RUN, nothing is sent | would mail {len(a.recipients)} "
-            f"recipient(s) | cooldown={a.cooldown_seconds}s"
-        )
-    mode = "ssl" if a.ssl else ("starttls" if a.starttls else "plain")
-    return (
-        f"alerts: {a.host}:{a.port} {mode} as {a.username or '<anonymous>'} "
-        f"-> {', '.join(a.recipients)} | cooldown={a.cooldown_seconds}s "
-        f"snapshot={'on' if a.attach_snapshot else 'off'}"
     )
 
 
@@ -342,7 +220,7 @@ class Track:
             per-track rather than a constant.
         state: One of ``upright``, ``falling``, ``fallen`` or ``recovering``.
         state_since: Timestamp the current state began.
-        alerted_at: When an alert was last raised for this track, or 0.0.
+        reported_at: When this track was last reported fallen, or 0.0.
     """
 
     track_id: int
@@ -356,7 +234,7 @@ class Track:
     upright_height: float = 0.0
     state: str = UPRIGHT
     state_since: float = 0.0
-    alerted_at: float = 0.0
+    reported_at: float = 0.0
 
     @property
     def width(self) -> float:
@@ -393,7 +271,7 @@ class Tracker:
     """Greedy IoU tracker with stable ids.
 
     Deliberately simple. It has no motion model, so it will swap ids when two
-    people cross while overlapping heavily. That costs a duplicate alert at
+    people cross while overlapping heavily. That costs a duplicate report at
     worst, which is the right way round for a safety feature: a Kalman filter
     would be more correct and considerably more to get wrong.
 
@@ -570,253 +448,60 @@ def update_fall_states(tracks: list[Track], fall: FallConfig, frame_h: int,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SMTP alerts
-#
-# Sending mail takes anything from tens of milliseconds to a TCP timeout, and
-# the run loop cannot afford either. Alerts are handed to a background thread
-# through a bounded queue: if the queue is full the alert is dropped and
-# counted, which is the correct trade. A stalled pipeline stops detecting the
-# next fall, and that is worse than missing one notification.
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class Alert:
-    """One pending notification."""
-
-    track_id: int
-    label: str
-    box: tuple[int, int, int, int]
-    signals: dict
-    frame_index: int
-    snapshot_path: str = ""
-
-
-def alert_password(cfg: AlertConfig) -> str:
-    """Read the SMTP password from the environment.
-
-    Deliberately not a config key. ``config.yaml`` is committed to the repo, and
-    a password in it is a password on GitHub. The variable is read at send time
-    so rotating it does not need a restart.
-    """
-    if not cfg.username:
-        return ""
-    password = os.environ.get(cfg.password_env, "")
-    if not password:
-        raise RuntimeError(
-            f"alerts.username is set but ${cfg.password_env} is empty.\n"
-            f"  export {cfg.password_env}='...' before running, or set "
-            f"alerts.dry_run: true to test without sending."
-        )
-    return password
-
-
-class AlertSender:
-    """Queues fall alerts and sends them as email from a background thread.
-
-    Attributes:
-        cfg: Alert settings.
-        sent: Successful sends.
-        failed: Sends that raised.
-        dropped: Alerts discarded because the queue was full.
-        suppressed: Alerts skipped by the cooldown.
-    """
-
-    def __init__(self, cfg: AlertConfig) -> None:
-        self.cfg = cfg
-        self.sent = 0
-        self.failed = 0
-        self.dropped = 0
-        self.suppressed = 0
-        self._queue: queue.Queue = queue.Queue(maxsize=cfg.queue_depth)
-        self._last_global = 0.0
-        self._thread = None
-        if cfg.enable:
-            self._thread = threading.Thread(target=self._worker, daemon=True)
-            self._thread.start()
-
-    # ── producer side, called from the run loop ──
-    def offer(self, alert: Alert, now: float) -> bool:
-        """Queue an alert unless the cooldown or a full queue says otherwise."""
-        if not self.cfg.enable:
-            return False
-        if now - self._last_global < self.cfg.cooldown_seconds:
-            self.suppressed += 1
-            return False
-        try:
-            self._queue.put_nowait(alert)
-        except queue.Full:
-            self.dropped += 1
-            return False
-        self._last_global = now
-        return True
-
-    def close(self, timeout: float = 10.0) -> None:
-        """Drain the queue and stop the worker."""
-        if self._thread is None:
-            return
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
-        self._thread.join(timeout)
-
-    # ── consumer side ──
-    def _worker(self) -> None:
-        while True:
-            alert = self._queue.get()
-            if alert is None:
-                return
-            try:
-                self.send_now(alert)
-                self.sent += 1
-            except Exception as exc:  # pragma: no cover - depends on the network
-                self.failed += 1
-                console.warn(f"alert send failed: {exc}")
-
-    def build_message(self, alert: Alert):
-        """Compose the email, attaching the snapshot when there is one."""
-        msg = EmailMessage()
-        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        msg["Subject"] = self.cfg.subject.format(
-            label=alert.label, track_id=alert.track_id, time=when, site=self.cfg.site
-        )
-        msg["From"] = self.cfg.sender
-        msg["To"] = ", ".join(self.cfg.recipients)
-        x1, y1, x2, y2 = alert.box
-        msg.set_content(
-            f"A fall was detected.\n\n"
-            f"  site      : {self.cfg.site}\n"
-            f"  time      : {when}\n"
-            f"  track     : #{alert.track_id} ({alert.label})\n"
-            f"  frame     : {alert.frame_index}\n"
-            f"  box       : x={x1} y={y1} w={x2 - x1} h={y2 - y1}\n"
-            f"  aspect    : {alert.signals.get('aspect_value')} "
-            f"(triggered: {alert.signals.get('aspect')})\n"
-            f"  collapsed : {alert.signals.get('collapse')}\n"
-            f"  descent   : {alert.signals.get('descent_value')} px/s "
-            f"(triggered: {alert.signals.get('descent')})\n\n"
-            f"Sent by the SiMa Modalix fall-detection app.\n"
-        )
-        if alert.snapshot_path and Path(alert.snapshot_path).is_file():
-            data = Path(alert.snapshot_path).read_bytes()
-            msg.add_attachment(
-                data, maintype="image", subtype="jpeg",
-                filename=Path(alert.snapshot_path).name,
-            )
-        return msg
-
-    def send_now(self, alert: Alert) -> None:
-        """Send one alert synchronously. Raises on any SMTP failure."""
-        msg = self.build_message(alert)
-        if self.cfg.dry_run:
-            console.report(
-                f"[alert:dry-run] would email {len(self.cfg.recipients)} recipient(s): "
-                f"{msg['Subject']}"
-            )
-            return
-        password = alert_password(self.cfg)
-        if self.cfg.ssl:
-            server = smtplib.SMTP_SSL(self.cfg.host, self.cfg.port, timeout=self.cfg.timeout)
-        else:
-            server = smtplib.SMTP(self.cfg.host, self.cfg.port, timeout=self.cfg.timeout)
-        try:
-            if self.cfg.starttls and not self.cfg.ssl:
-                server.starttls()
-            if self.cfg.username:
-                server.login(self.cfg.username, password)
-            server.send_message(msg)
-        finally:
-            try:
-                server.quit()
-            except Exception:
-                pass
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Drawing
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def track_label(track: Track, labels: list[str]) -> str:
-    """What a track's box calls it.
+def fall_class_id(labels: list[str], tracked: object) -> int:
+    """The class id a fallen box is drawn as.
 
-    A fallen track is relabelled to :data:`FALL_CLASS`; everything else is the
-    class the detector reported. The state machine's own words never appear --
-    `upright` and `recovering` are this program's internal vocabulary and mean
-    nothing to someone watching a corridor.
+    FALL is not a class the model knows, so it is appended past the end of the
+    model's own names. That alone would give it whichever palette entry the
+    cycle happens to land on -- with 80 COCO classes and four colours, exactly
+    the one `person` already uses, so a fallen box would come out the same
+    colour as the person standing next to it.
+
+    Nudged past that instead: the first id beyond the labels whose colour no
+    tracked class is already using. There are four colours, so this finds one
+    unless every single one is spoken for, and then it gives up and takes the
+    first -- the caption still says FALL.
     """
-    if track.state == FALLEN:
-        return FALL_CLASS
-    class_id = int(track.box.get("class_id", 0))
-    if 0 <= class_id < len(labels):
-        return labels[class_id]
-    return "person"
+    used = {class_color(int(class_id)) for class_id in (tracked or ())}
+    base = len(labels)
+    for offset in range(len(CLASS_COLORS)):
+        if class_color(base + offset) not in used:
+            return base + offset
+    return base
 
 
-def track_color(track: Track) -> tuple[int, int, int]:
-    """A fallen track's alert colour, or its ordinary class colour."""
-    if track.state == FALLEN:
-        return FALL_COLOR
-    return class_color(int(track.box.get("class_id", 0)))
+def overlay_boxes(tracks: list[Track], labels: list[str],
+                  tracked: object = None) -> tuple[list[dict], list[str]]:
+    """Tracks as plain detection boxes, with a fallen one relabelled to FALL.
 
-
-def track_caption(track: Track, draw, labels: list[str]) -> str:
-    """Build the caption for one tracked person.
-
-    The same shape as a detection's: the class, then the score. A fall is a
-    change of class, not a different kind of readout -- so a fallen person
-    reads `FALL 0.93` where they read `person 0.93` a second earlier, and
-    nothing else about the box moves except its colour.
-    """
-    parts = []
-    if draw.show_track_ids:
-        parts.append(f"#{track.track_id}")
-    if draw.show_labels:
-        parts.append(track_label(track, labels))
-    if draw.show_scores:
-        parts.append(f"{track.box['score']:.{max(0, draw.score_decimals)}f}")
-    return " ".join(parts)
-
-
-def draw_tracks(frame, tracks: list[Track], draw, labels: list[str]) -> None:
-    """Draw every tracked person as an ordinary detection, in place.
-
-    Deliberately the same picture `detect` draws: the class colour, a centre
-    dot, and a `class score` caption. A fall changes one thing, the class --
-    which changes the caption and the colour with it, and nothing else. The
-    intermediate states do not paint themselves: someone watching a corridor
-    is watching for a fall, and a box that changes colour twice on the way
-    there trains them to ignore it.
+    This is the whole of what fall detection does to a frame. There is no
+    fall-specific drawing: the boxes go through ``draw_boxes`` exactly as
+    ``detect``'s do, so the palette, the captions, the centre dots and the
+    ordering are the same code and cannot drift apart.
 
     Args:
-        frame: BGR image, modified in place.
         tracks: Live tracks with their fall state already resolved.
-        draw: Visualization settings.
-        labels: Class names, so a box says what was detected.
+        labels: The model's class names.
+        tracked: Class ids that can fall, used to keep FALL's colour off them.
+
+    Returns:
+        ``(boxes, labels)`` ready for :func:`sima_vision.draw.draw_boxes`. The
+        labels are padded so FALL lands on the id that was chosen for it; the
+        padding is never looked up.
     """
-    cv2 = runtime.cv2
-    height, width = frame.shape[:2]
-    scale = draw_scale(frame, draw)
-    thickness = max(1, int(round(draw.box_thickness * scale)))
-    radius = max(2, int(round(draw.centre_dot_radius * scale)))
-
-    # Paint larger boxes first, so a small figure in front stays legible.
-    ordered = sorted(tracks, key=lambda t: t.width * t.height, reverse=True)
-    for track in ordered:
-        x1 = max(0, int(round(track.box["x1"])))
-        y1 = max(0, int(round(track.box["y1"])))
-        x2 = min(width - 1, int(round(track.box["x2"])))
-        y2 = min(height - 1, int(round(track.box["y2"])))
-        if x2 <= x1 or y2 <= y1:
-            continue
-
-        color = track_color(track)
-        if draw.centre_dot:
-            cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
-        draw_caption(frame, track_caption(track, draw, labels), (x1, y1),
-                     color, draw, scale)
+    fall_id = fall_class_id(labels, tracked)
+    names = [*labels] + [""] * (fall_id - len(labels)) + [FALL_CLASS]
+    boxes = []
+    for track in tracks:
+        box = dict(track.box)
+        if track.state == FALLEN:
+            box["class_id"] = fall_id
+        boxes.append(box)
+    return boxes, names
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -826,35 +511,17 @@ def draw_tracks(frame, tracks: list[Track], draw, labels: list[str]) -> None:
 
 @dataclass
 class FallPipeline(Pipeline):
-    """Pipeline plus the tracker, the alert sender and the fall tally.
+    """Pipeline plus the tracker and the fall tally.
 
     Attributes:
         tracker: The :class:`Tracker` following people across frames.
-        alerts: The :class:`AlertSender` owning the SMTP thread.
         fall_class_ids: Class ids that can fall, or None for every class.
         falls: Confirmed falls so far this run.
     """
 
     tracker: object = None
-    alerts: object = None
     fall_class_ids: object = None
     falls: int = 0
-
-    def close_extras(self) -> None:
-        if self.alerts is None:
-            return
-        # Drain first: an alert queued microseconds before Ctrl-C is still a
-        # fall that happened, and the thread is a daemon so nothing else would
-        # wait for it.
-        stats = self.alerts
-        stats.close()
-        if stats.sent or stats.failed or stats.dropped or stats.suppressed:
-            console.report(
-                f"alerts: sent={stats.sent} failed={stats.failed} "
-                f"dropped={stats.dropped} suppressed_by_cooldown={stats.suppressed}"
-            )
-        self.alerts = None
-
 
 def person_boxes(cfg: FallAppConfig, pipeline: FallPipeline, boxes: list[dict],
                  frame_h: int) -> list[dict]:
@@ -869,19 +536,6 @@ def person_boxes(cfg: FallAppConfig, pipeline: FallPipeline, boxes: list[dict],
             continue
         kept.append(box)
     return kept
-
-
-def write_snapshot(cfg: FallAppConfig, track: Track, frame_index: int, frame) -> str:
-    """Write the annotated frame that an alert refers to. Returns the path."""
-    if frame is None or not cfg.alerts.attach_snapshot:
-        return ""
-    directory = Path(cfg.alerts.snapshot_dir)
-    directory.mkdir(parents=True, exist_ok=True)
-    out = directory / f"fall_track{track.track_id:03d}_frame{frame_index:06d}.jpg"
-    if not runtime.cv2.imwrite(str(out), frame):
-        console.warn(f"failed to write snapshot {out}")
-        return ""
-    return str(out)
 
 
 class FallRuntime(TaskRuntime):
@@ -913,58 +567,36 @@ class FallRuntime(TaskRuntime):
             update_fall_states(tracks, cfg.fall, pipeline.frame_h, now)
             if cfg.fall.enable else []
         )
-        if fallen_now:
-            self._raise_alerts(pipeline, cfg, tracks, fallen_now, frame, index, now)
+        self.report_falls(pipeline, cfg, fallen_now, index, now)
         return frame, tracks, 0.0
 
-    def _raise_alerts(self, pipeline: FallPipeline, cfg: FallAppConfig, tracks: list[Track],
-                      fallen_now: list[Track], frame, index: int, now: float) -> None:
-        """Log, snapshot and queue an alert for each track that just fell.
+    def report_falls(self, pipeline: FallPipeline, cfg: FallAppConfig,
+                     fallen_now: list[Track], index: int, now: float) -> None:
+        """Count and log each track that just crossed into FALLEN.
 
-        A confirmed fall is rare, so rendering the overlay here -- rather than
-        waiting for the sink thread to do it -- costs almost nothing and keeps
-        the snapshot attached to the alert that refers to it.
+        A line on the console and a number in the run summary. There is no
+        sending here any more: the frame says FALL, the recording keeps it, and
+        anything that wants to act on it can watch this output.
         """
-        snapshot_frame = (
-            self.render(cfg, pipeline, frame, tracks, float(pipeline.fps or 25))
-            if cfg.alerts.attach_snapshot
-            else None
-        )
         for track in fallen_now:
             pipeline.falls += 1
             signals = fall_signals(track, cfg.fall, pipeline.frame_h)
-            snapshot = write_snapshot(cfg, track, index, snapshot_frame)
-            class_id = int(track.box["class_id"])
-            label = (
-                pipeline.labels[class_id]
-                if 0 <= class_id < len(pipeline.labels) else "person"
-            )
             console.report(
-                f"[FALL] track #{track.track_id} ({label}) at frame {index} "
-                f"aspect={signals['aspect_value']} descent={signals['descent_value']}px/s"
-                + (f" snapshot={snapshot}" if snapshot else "")
+                f"[FALL] track #{track.track_id} at frame {index} "
+                f"aspect={signals['aspect_value']} "
+                f"descent={signals['descent_value']}px/s"
             )
-            queued = pipeline.alerts.offer(
-                Alert(
-                    track_id=track.track_id, label=label,
-                    box=(int(track.box["x1"]), int(track.box["y1"]),
-                         int(track.box["x2"]), int(track.box["y2"])),
-                    signals=signals, frame_index=index, snapshot_path=snapshot,
-                ),
-                now,
-            )
-            track.alerted_at = now if queued else track.alerted_at
+            track.reported_at = now
 
     def render(self, cfg: FallAppConfig, pipeline: FallPipeline, frame, results, fps: float):
-        """Draw once per frame and share the result between the video and JPEG sinks."""
+        """Draw once per frame and share the result between the video and JPEG sinks.
+
+        Line for line what ``DetectRuntime.render`` does, which is the point.
+        """
         annotated = frame.copy()
-        draw_tracks(annotated, results, cfg.draw, pipeline.labels)
-        down = [t for t in results if t.state == FALLEN]
-        if cfg.draw.banner and down:
-            ids = ", ".join(f"#{t.track_id}" for t in down)
-            draw_banner(annotated, f"FALL DETECTED - track {ids}", cfg.draw)
-        # FPS last, after the banner as well as the tracks. See
-        # DetectRuntime.render.
+        boxes, labels = overlay_boxes(results, pipeline.labels, pipeline.fall_class_ids)
+        draw_boxes(annotated, boxes, labels, cfg.draw)
+        # FPS last, so nothing is ever drawn over it. See DetectRuntime.render.
         if cfg.video_hud:
             draw_fps(annotated, fps, cfg.draw)
         return annotated
@@ -977,21 +609,14 @@ class FallRuntime(TaskRuntime):
 # Task
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Ids and scores off: a fall frame is read at a glance, and `#3 person 0.87`
-# is two numbers in front of the one word that matters. Both are still
-# config flags for anyone tuning the tracker.
-# The same overlay `detect` draws, plus the alert banner. Scores are on
-# because a fall box is an ordinary detection box whose class happens to be
-# FALL, and `FALL` alone in the place a score usually sits reads as a different
-# kind of readout. Track ids stay off: they are this app's bookkeeping, not
-# something a detection carries.
-FALL_DRAW = DrawConfig(box_thickness=3, centre_dot=True, banner=True,
-                       show_track_ids=False, show_scores=True)
+# `detect`'s own settings, the same object rather than a copy of the numbers.
+# The two frames are meant to be indistinguishable apart from the word FALL,
+# and a second DrawConfig here is how they would quietly stop being.
 
 
 class FallTask(Task):
     name = "fall"
-    help = "Track people and email when one of them goes down"
+    help = "Detect people and relabel the box when one of them goes down"
     config_class = FallAppConfig
     graph_name = "yolo_detector"
     result_label = "detections"
@@ -1001,7 +626,7 @@ class FallTask(Task):
         family="yolo26",
         save_dir="frames",
         video_path="falls.mp4",
-        draw=FALL_DRAW,
+        draw=DETECT_DRAW,
     )
 
     def add_arguments(self, parser) -> None:
@@ -1011,68 +636,17 @@ class FallTask(Task):
         )
         parser.add_argument(
             "--confirm", dest="fall.confirm_seconds", type=float, metavar="S",
-            help="How long a fall signal must hold before an alert fires. Default 1.5.",
+            help="How long a fall signal must hold before the box is relabelled. "
+                 "Default 1.5.",
         )
         parser.add_argument(
             "--no-fall", dest="fall.enable", action="store_const", const=False,
             help="Track people without judging falls, which is how you tune tracking first.",
         )
-        parser.add_argument(
-            "--alert-to", dest="alerts.to", nargs="+", metavar="EMAIL",
-            help="Recipients for the fall alert. Implies --alerts.",
-        )
-        parser.add_argument(
-            "--alert-from", dest="alerts.from", metavar="EMAIL",
-            help="From address for the fall alert.",
-        )
-        parser.add_argument(
-            "--alerts", dest="alerts.enable", action="store_const", const=True,
-            help="Enable alerts. Still a dry run unless --send is given.",
-        )
-        parser.add_argument(
-            "--send", dest="alerts.dry_run", action="store_const", const=False,
-            help="Actually connect to the SMTP server. Without it alerts are composed "
-                 "and logged but never sent.",
-        )
-        parser.add_argument(
-            "--smtp-host", dest="alerts.smtp.host", metavar="HOST",
-            help="SMTP server. Default smtp.gmail.com.",
-        )
-        parser.add_argument(
-            "--smtp-port", dest="alerts.smtp.port", type=int, metavar="PORT",
-            help="SMTP port. 587 for STARTTLS, 465 for SSL. Default 587.",
-        )
-        parser.add_argument(
-            "--smtp-user", dest="alerts.smtp.username", metavar="USER",
-            help="SMTP login. The password is read from $FALL_ALERT_SMTP_PASSWORD, "
-                 "never from the config.",
-        )
-        parser.add_argument(
-            "--site", dest="alerts.site", metavar="NAME",
-            help="Human name for this camera, put in the alert subject and body.",
-        )
-        parser.add_argument(
-            "--test-alert", action="store_true",
-            help="Send one fake alert and exit. Proves the SMTP settings and the "
-                 "password environment variable work, without waiting for a fall "
-                 "-- or for a board.",
-        )
-
-    def link_overrides(self, overrides: dict) -> dict:
-        # Naming a recipient or a sender only makes sense if alerts are on, and
-        # silently composing nothing would be the worst of both worlds.
-        if overrides.get("alerts.to") or overrides.get("alerts.from"):
-            overrides.setdefault("alerts.enable", True)
-        # --send is meaningless without alerts on, so let it turn them on too.
-        if overrides.get("alerts.dry_run") is False:
-            overrides.setdefault("alerts.enable", True)
-        return overrides
-
     def extra_sections(self, raw: dict) -> dict:
         return {
             "track": load_track_config(raw),
             "fall": load_fall_config(raw),
-            "alerts": load_alert_config(raw),
         }
 
     def validate(self, cfg: FallAppConfig) -> None:
@@ -1086,7 +660,7 @@ class FallTask(Task):
             cfg.track.classes, load_labels(cfg.labels_path),
             "tracking.classes", cfg.labels_path,
         )
-        lines = [describe_fall(cfg), describe_alerts(cfg)]
+        lines = [describe_fall(cfg)]
         if ids is not None:
             lines.append(f"tracked class ids: {sorted(ids)}")
         return lines
@@ -1095,7 +669,6 @@ class FallTask(Task):
         return FallPipeline(
             labels=labels,
             tracker=Tracker(cfg.track),
-            alerts=AlertSender(cfg.alerts),
             fall_class_ids=resolve_classes(
                 cfg.track.classes, labels, "tracking.classes", cfg.labels_path
             ),
@@ -1103,39 +676,6 @@ class FallTask(Task):
 
     def prepare(self, cfg: FallAppConfig, pipeline: FallPipeline, step) -> None:
         step.detail(describe_fall(cfg))
-        step.detail(describe_alerts(cfg))
-
-    def early_exit(self, cfg: FallAppConfig, args) -> int | None:
-        """``--test-alert``: send one fake alert now and report what happened.
-
-        Deliberately synchronous and outside the pipeline. This is the command
-        you run when mail is not arriving, so it has to surface the real
-        exception rather than queue the work and return 0.
-        """
-        if not getattr(args, "test_alert", False):
-            return None
-        if not cfg.alerts.enable:
-            console.error(
-                "alerts.enable is off, so there is nothing to test.\n"
-                "Pass --alerts, or --alert-to somebody@example.com."
-            )
-            return 1
-        # enable=False keeps AlertSender from starting its worker thread; this
-        # send happens on this thread so a failure is raised, not logged.
-        sender = AlertSender(replace(cfg.alerts, enable=False))
-        probe = Alert(
-            track_id=0, label="person", box=(100, 100, 400, 700),
-            signals={"aspect": True, "collapse": False, "descent": False,
-                     "aspect_value": 1.35, "descent_value": 0.0},
-            frame_index=0,
-        )
-        console.info(describe_alerts(cfg))
-        sender.send_now(probe)
-        console.report(
-            "test alert composed (dry_run is on, nothing left the board)."
-            if cfg.alerts.dry_run else "test alert sent."
-        )
-        return 0
 
     def runtime(self, cfg, pipeline) -> TaskRuntime:
         return FallRuntime()

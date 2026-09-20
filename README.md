@@ -58,7 +58,7 @@ them needs no login and no `sima-cli`.
 |:--|:--|:--|
 | `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4` |
 | `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4` |
-| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4`, `alerts/` |
+| `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4` |
 
 The annotated video is the only thing written. Stills are off unless you ask for them
 with `--save`.
@@ -78,17 +78,19 @@ sima-vision segment --no-blur              # a plain overlay, nothing blurred
 </details>
 
 <details>
-<summary>&nbsp;<b>Fall detection</b> &nbsp;·&nbsp; tracks people, with optional email alerts</summary>
+<summary>&nbsp;<b>Fall detection</b> &nbsp;·&nbsp; tracks people and relabels the box when one goes down</summary>
 
 <br>
 
 ```bash
 sima-vision fall
-sima-vision fall --alert-to ops@example.com
+sima-vision fall --classes person --confirm 2.0
 ```
 
-Nothing is emailed until you pass `--send`. Without it a fall is composed and logged, so
-you can see what would have gone out.
+The frame is the one `detect` draws: same palette, same boxes, same captions. A confirmed
+fall changes one thing, the class the box is labelled with, so a person reading `person
+0.93` a second earlier now reads `FALL 0.93`. Each fall is also printed on the console and
+counted in the run summary.
 
 </details>
 
@@ -149,15 +151,6 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--classes CLASS...` | `fall` | Classes that can fall. Default `person` |
 | `--confirm S` | `fall` | How long a fall signal must hold before it counts. Default `1.5` |
 | `--no-fall` | `fall` | Track without judging falls, which is how you tune tracking first |
-| `--alert-to EMAIL...` | `fall` | Recipients. Implies `--alerts` |
-| `--alert-from EMAIL` | `fall` | From address |
-| `--alerts` | `fall` | Enable alerts. Still a dry run until `--send` |
-| `--send` | `fall` | Actually connect to the SMTP server |
-| `--smtp-host HOST` | `fall` | SMTP server. Default `smtp.gmail.com` |
-| `--smtp-port PORT` | `fall` | `587` for STARTTLS, `465` for SSL. Default `587` |
-| `--smtp-user USER` | `fall` | SMTP login. The password comes from `$FALL_ALERT_SMTP_PASSWORD` and nowhere else |
-| `--site NAME` | `fall` | Camera name, used in the alert subject and body |
-| `--test-alert` | `fall` | Send one fake alert and exit. Proves the SMTP settings without a fall, or a board |
 
 A `config.yaml` in the working directory is picked up on its own. Flags beat it, and it
 beats the built-in defaults.
@@ -242,7 +235,6 @@ sima-vision push my-clip.h264
 | `SIMA_VISION_AUTO_INSTALL` | `0` to look but never install |
 | `SIMA_VISION_QUIET` | Non-empty is `--quiet` for every command |
 | `SIMA_VISION_COLOR` | `0` or `1` to force colour off or on. `NO_COLOR` also works |
-| `FALL_ALERT_SMTP_PASSWORD` | The only place the SMTP password is ever read from |
 
 ## Contributing
 

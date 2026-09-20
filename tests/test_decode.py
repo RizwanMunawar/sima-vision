@@ -17,7 +17,7 @@ import sima_vision.runtime as rt
 from sima_vision.samples import BBOX_RECORD, extract_bbox_payload, joined_field, parse_boxes
 from sima_vision.sinks import Pipeline
 from sima_vision.tasks import TASKS
-from sima_vision.tasks.fall import FALLEN, FallPipeline
+from sima_vision.tasks.fall import FALLEN
 
 
 class SampleKind:
@@ -242,40 +242,37 @@ def test_fall_decode_drops_boxes_too_small_to_judge():
     assert tracks == [], "a 90px box in a 400px frame is under the 50% floor"
 
 
-def test_a_fall_fires_an_alert_and_is_counted(tmp_path, monkeypatch):
+def test_a_fall_is_counted_and_reported(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    task, cfg, pipeline = fall_setup(**{
-        "fall.confirm_seconds": 0.0,
-        "alerts.to": ["ops@example.com"],
-        "alerts.attach_snapshot": True,
-    })
+    task, cfg, pipeline = fall_setup(**{"fall.confirm_seconds": 0.0})
     runtime = task.runtime(cfg, pipeline)
-    try:
-        # Upright first, so the track learns a reference height...
-        for index in range(1, 4):
-            runtime.decode(
-                pipeline, cfg, joined([person(50, 40, 30, 200)], 200, 400), index
-            )
-        # ...then wide and short, which is what lying down looks like.
-        for index in range(4, 8):
-            _, tracks, _ = runtime.decode(
-                pipeline, cfg, joined([person(40, 300, 160, 60)], 200, 400), index
-            )
-        assert pipeline.falls >= 1
-        assert any(t.state == FALLEN for t in tracks)
-        # The snapshot the alert refers to must actually be on disk.
-        snapshots = list((tmp_path / cfg.alerts.snapshot_dir).glob("*.jpg"))
-        assert snapshots, "a confirmed fall should have written its snapshot"
-    finally:
-        pipeline.close()
+    # Upright first, so the track learns a reference height...
+    for index in range(1, 4):
+        runtime.decode(pipeline, cfg, joined([person(50, 40, 30, 200)], 200, 400), index)
+    # ...then wide and short, which is what lying down looks like.
+    for index in range(4, 8):
+        _, tracks, _ = runtime.decode(
+            pipeline, cfg, joined([person(40, 300, 160, 60)], 200, 400), index
+        )
+    assert pipeline.falls >= 1
+    assert any(t.state == FALLEN for t in tracks)
 
 
-def test_the_fall_pipeline_closes_its_alert_sender():
-    task, cfg, pipeline = fall_setup(**{"alerts.to": ["a@x.com"]})
-    assert isinstance(pipeline, FallPipeline)
-    assert pipeline.alerts is not None
-    pipeline.close()
-    assert pipeline.alerts is None, "close must drain and drop the sender"
+def test_a_fall_only_changes_the_class_on_the_frame(tmp_path, monkeypatch):
+    """No separate overlay: the fallen box is captioned FALL and that is all."""
+    from sima_vision.tasks.fall import FALL_CLASS, overlay_boxes
+
+    monkeypatch.chdir(tmp_path)
+    task, cfg, pipeline = fall_setup(**{"fall.confirm_seconds": 0.0})
+    runtime = task.runtime(cfg, pipeline)
+    for index in range(1, 4):
+        runtime.decode(pipeline, cfg, joined([person(50, 40, 30, 200)], 200, 400), index)
+    for index in range(4, 8):
+        _, tracks, _ = runtime.decode(
+            pipeline, cfg, joined([person(40, 300, 160, 60)], 200, 400), index
+        )
+    boxes, labels = overlay_boxes(tracks, pipeline.labels, pipeline.fall_class_ids)
+    assert FALL_CLASS in [labels[b["class_id"]] for b in boxes]
 
 
 # ── segment ──

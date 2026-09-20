@@ -9,7 +9,7 @@ downloads the model pack and a sample clip, and prints what it is doing at each
 stage. See :mod:`sima_vision.bootstrap` and :mod:`sima_vision.console`.
 
 Three applications share one pipeline: object detection, instance segmentation
-with an optional background blur, and fall detection with SMTP alerts. They
+with a background blur, and fall detection. They
 differ only in what they do with a frame once the MLA has finished with it, so
 everything up to that point -- config loading, assets, source geometry, the Neat
 graph, sample decoding, drawing and the sinks -- lives in this package and is
@@ -20,7 +20,7 @@ From the command line::
 
     sima-vision detect  --source clip.h264 --model yolo26m-det.tar.gz
     sima-vision segment --source clip.h264 --model yolo26m-seg.tar.gz --blur
-    sima-vision fall    --source rtsp://camera/live --alert-to ops@example.com
+    sima-vision fall    --source rtsp://camera/live
 
 or from Python, with the same settings under the same names::
 

@@ -71,7 +71,7 @@ examples:
   sima-vision detect  --source clip.mp4                    reframed for you, once
   sima-vision detect  --source https://example.com/clip.h264
   sima-vision segment --blur --keep-classes person
-  sima-vision fall    --source rtsp://cam/live --alert-to ops@example.com
+  sima-vision fall    --source rtsp://cam/live
 
 without a board:
   sima-vision detect --validate            check the settings, no hardware at all
@@ -442,7 +442,7 @@ def add_pull_parser(subparsers) -> None:
         description=(
             "Copy a run's output back to this machine. With no names it asks "
             "for everything any task could have written -- the annotated video, "
-            "frames/, alerts/ and config.yaml -- and takes whatever is there, "
+            "frames/ and config.yaml -- and takes whatever is there, "
             "so it does not need to be told which task ran."
         ),
         epilog=(

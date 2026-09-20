@@ -105,44 +105,6 @@ def test_segment_flags():
     assert overrides["segmentation.threshold"] == 0.3
 
 
-def test_fall_flags_reach_the_nested_smtp_section():
-    args = parse(["fall", "--alert-to", "a@x.com", "--smtp-port", "465", "--send"])
-    overrides = collect_overrides(args)
-    assert overrides["alerts.to"] == ["a@x.com"]
-    assert overrides["alerts.smtp.port"] == 465
-    assert overrides["alerts.dry_run"] is False
-
-
-def test_alert_recipient_turns_alerts_on():
-    cfg = TASKS["fall"]().load(
-        None,
-        {"model.path": "m.tar.gz", "source.uri": "c.h264", "alerts.to": ["a@x.com"]},
-        use_file=False,
-    )
-    assert cfg.alerts.enable is True
-    # ...but still a dry run, so nobody is emailed by accident.
-    assert cfg.alerts.dry_run is True
-
-
-def test_send_is_needed_to_actually_send():
-    cfg = TASKS["fall"]().load(
-        None,
-        {
-            "model.path": "m.tar.gz", "source.uri": "c.h264",
-            "alerts.to": ["a@x.com"], "alerts.from": "b@x.com",
-            "alerts.dry_run": False,
-        },
-        use_file=False,
-    )
-    assert cfg.alerts.enable is True
-    assert cfg.alerts.dry_run is False
-
-
-def test_config_and_no_config_are_mutually_exclusive():
-    with pytest.raises(SystemExit):
-        parse(["detect", "--config", "a.yaml", "--no-config"])
-
-
 def test_minimal_strips_the_sinks():
     task = TASKS["segment"]()
     cfg = task.load(

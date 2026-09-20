@@ -214,16 +214,6 @@ visualization:
   show_labels: on            # the fall state in the caption: upright/falling/fallen
   show_scores: on            # confidence in the caption
 
-  # Full-width strip across the bottom while anyone is down. A red box around
-  # one person is easy to miss on a wall of camera tiles; a band is not.
-  banner:
-    enable: on
-    text_scale: 0.0          # 0 = follow text_scale above
-    text_thickness: 0        # 0 = follow text_thickness above
-    padding: 18
-    alpha: 0.75              # strip opacity, 0.0 to 1.0
-    bg_color: [56, 56, 255]  # red
-    text_color: [255, 255, 255]
   score_decimals: 2          # 2 gives "person 0.57", 0 gives "person 1"
 
   text_color: [255, 255, 255]   # caption text, white
