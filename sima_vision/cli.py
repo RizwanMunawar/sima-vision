@@ -271,15 +271,6 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
         "--hud-padding", dest="visualization.hud.padding", type=int, metavar="PX",
         help="Gap between badge text and its edge, which is what sizes the badge.",
     )
-    out.add_argument(
-        "--insight", dest="output.insight.enable", action="store_const", const=True,
-        help="Stream to Neat Insight over UDP. Off by default: its encoder shares "
-             "the codec daemon with the decoder, so it can stall a file run.",
-    )
-    out.add_argument(
-        "--insight-host", dest="output.insight.host", metavar="HOST",
-        help="Insight address as the DevKit sees it. Default 127.0.0.1.",
-    )
 
 
 def bgr_colour(value: str) -> list[int]:
@@ -718,8 +709,6 @@ def print_validation(task, cfg) -> None:
         outputs.append(f"video={cfg.video_path}")
     if cfg.save_enable:
         outputs.append(f"stills={cfg.save_dir}/ every={cfg.save_every}")
-    if cfg.insight_enable:
-        outputs.append(f"insight={cfg.insight_host}:{cfg.video_port_base}")
     lines.append(f"output:  {' '.join(outputs) or '<nothing written>'}")
     for line in lines:
         console.info(f"  {line}")

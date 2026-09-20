@@ -280,14 +280,3 @@ output:
     overlay: true
     format: jpg              # jpg | png
 
-  # Optional live UDP feed to Neat Insight. Off by default: everything you need
-  # is the annotated video and stills above, which survive the run. Turning this
-  # on also needs inbound UDP 9000-9079 / 9100-9179 opened on the Hyper-V firewall.
-  insight:
-    enable: false
-    annotated: true           # send our overlay. false sends raw and lets Insight draw
-    host: 192.168.137.1       # your PC ip address as the DevKit sees it, NOT 127.0.0.1
-    channel: 0                # video port = video_port_base + channel
-    video_port_base: 9000
-    metadata_port_base: 9100
-    bitrate_kbps: 2000

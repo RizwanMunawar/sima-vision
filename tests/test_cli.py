@@ -152,7 +152,7 @@ def test_minimal_strips_the_sinks():
     stripped = task.post_process(cfg, args)
     assert stripped.segment.masks == "off"
     assert stripped.blur.enable is False
-    assert not (stripped.save_enable or stripped.video_enable or stripped.insight_enable)
+    assert not (stripped.save_enable or stripped.video_enable)
 
 
 def test_validate_exits_zero_without_a_board():

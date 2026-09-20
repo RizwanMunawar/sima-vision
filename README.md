@@ -118,8 +118,6 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--hud-bg B,G,R` | all | Badge fill colour. Default `128,0,128` |
 | `--hud-color B,G,R` | all | Badge text colour. Default `255,255,255` |
 | `--hud-padding PX` | all | Gap between badge text and its edge, which is what sizes the badge |
-| `--insight` | all | Stream to Neat Insight over UDP. Off by default |
-| `--insight-host HOST` | all | Insight address as the board sees it. Default `127.0.0.1` |
 | `--config`, `-c PATH` | all | Config file. Defaults to `./config.yaml` |
 | `--no-config` | all | Ignore any config file and use defaults plus these flags |
 | `--validate` | all | Resolve and check the settings, then stop. Needs no board |

@@ -574,30 +574,6 @@ class SegmentRuntime(TaskRuntime):
             draw_fps(annotated, fps, cfg.draw)
         return annotated
 
-    def metadata(self, pipeline: SegmentPipeline, results) -> list[dict]:
-        labels = pipeline.labels
-        objects = []
-        for index, inst in enumerate(results, start=1):
-            class_id = int(inst.box["class_id"])
-            objects.append(
-                {
-                    "id": f"obj_{index}",
-                    "label": labels[class_id] if 0 <= class_id < len(labels) else "unknown",
-                    "confidence": float(inst.box["score"]),
-                    "bbox": [
-                        float(inst.x1),
-                        float(inst.y1),
-                        float(inst.x2 - inst.x1),
-                        float(inst.y2 - inst.y1),
-                    ],
-                    # Pixels the mask actually covers, which is what separates a
-                    # thin diagonal object from the box that contains it.
-                    "mask_area": inst.mask_area,
-                    "foreground": bool(inst.keep),
-                }
-            )
-        return objects
-
     def summarise(self, pipeline: SegmentPipeline, processed: int) -> list[str]:
         return [f"masks={pipeline.mask_kind or 'none'}"]
 
@@ -621,7 +597,6 @@ class SegmentTask(Task):
         family="yolo26-seg",
         save_dir="frames",
         video_path="segmentation.mp4",
-        insight_enable=False,
         draw=SEGMENT_DRAW,
     )
 
@@ -663,9 +638,9 @@ class SegmentTask(Task):
         parser.add_argument(
             "--minimal", action="store_true",
             help="Pull frames and do nothing else: no masks, no blur, no overlay, no "
-                 "video, no stills, no Insight. If a run that stalls part-way through "
-                 "completes with this, the cause is how much work the app does per "
-                 "frame; if it stalls at the same frame, the cause is the graph.",
+                 "video, no stills. If a run that stalls part-way through completes "
+                 "with this, the cause is how much work the app does per frame; if it "
+                 "stalls at the same frame, the cause is the graph.",
         )
 
     def post_process(self, cfg: SegmentAppConfig, args) -> SegmentAppConfig:
@@ -675,7 +650,7 @@ class SegmentTask(Task):
         # graph, so it isolates "we are too slow" from "the graph is wrong" in a
         # single run.
         print(
-            "[minimal] masks, blur, overlay, video, stills and Insight are all "
+            "[minimal] masks, blur, overlay, video and stills are all "
             "off.\n          Reaching the end of the clip means the graph is fine "
             "and the app was\n          simply holding buffers too long.",
             flush=True,
@@ -684,7 +659,7 @@ class SegmentTask(Task):
             cfg,
             segment=replace(cfg.segment, masks="off", describe=False),
             blur=replace(cfg.blur, enable=False),
-            save_enable=False, video_enable=False, insight_enable=False,
+            save_enable=False, video_enable=False,
         )
 
     def extra_sections(self, raw: dict) -> dict:

@@ -109,9 +109,6 @@ class CountingRuntime(TaskRuntime):
             raise RuntimeError("sink exploded")
         return frame.copy()
 
-    def metadata(self, pipeline, results) -> list[dict]:
-        return [{"id": str(i)} for i, _ in enumerate(results)]
-
 
 def make(frames: int = 5, source_frames: int = 0, writer: bool = True, **settings):
     """A config and a Pipeline wired to a FakeRun."""

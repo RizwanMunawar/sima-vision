@@ -452,7 +452,6 @@ class TaskDefaults:
         overflow_policy: Default ``runtime.overflow_policy``.
         save_dir: Default ``output.save.dir``.
         video_path: Default ``output.video.path``.
-        insight_enable: Default ``output.insight.enable``.
         draw: Per-task :class:`DrawConfig` defaults.
     """
 
@@ -462,7 +461,6 @@ class TaskDefaults:
     overflow_policy: str = "auto"
     save_dir: str = "frames"
     video_path: str = "output.mp4"
-    insight_enable: bool = False
     draw: DrawConfig = DrawConfig()
 
 
@@ -583,14 +581,6 @@ class BaseConfig:
             MJPG fallback.
         video_fps: Output frame rate. 0 matches the source.
         video_hud: Whether to draw the frame-rate badge.
-        insight_enable: Whether to stream to Neat Insight.
-        insight_annotated: Whether Insight receives the annotated frame. False
-            sends the raw frame and lets Insight draw its own overlay.
-        insight_host: Insight address as the DevKit sees it.
-        insight_channel: Channel offset added to both port bases.
-        video_port_base: First UDP video port.
-        metadata_port_base: First UDP metadata port.
-        bitrate_kbps: H.264 encoder bitrate for the Insight feed.
         draw: Overlay appearance. See :class:`DrawConfig`.
         config_path: The file this came from, or None when it is all defaults.
             Reported by ``--validate`` and used to resolve relative asset paths.
@@ -647,14 +637,6 @@ class BaseConfig:
     video_codec: str = "mp4v"
     video_fps: int = 0
     video_hud: bool = True
-
-    insight_enable: bool = False
-    insight_annotated: bool = True
-    insight_host: str = "127.0.0.1"
-    insight_channel: int = 0
-    video_port_base: int = 9000
-    metadata_port_base: int = 9100
-    bitrate_kbps: int = 2000
 
     draw: DrawConfig = DrawConfig()
 
@@ -718,7 +700,6 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
     output = _section(raw, "output")
     save = _section(output, "save")
     video = _section(output, "video")
-    insight = _section(output, "insight")
     source_type = _str(source, "type", "video").lower()
 
     # An unset path is not an error any more: it means "the default for this
@@ -780,13 +761,6 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         video_codec=_str(video, "codec", "mp4v"),
         video_fps=_int(video, "fps", 0),
         video_hud=_bool(video, "hud", True),
-        insight_enable=_bool(insight, "enable", defaults.insight_enable),
-        insight_annotated=_bool(insight, "annotated", True),
-        insight_host=_str(insight, "host", "127.0.0.1"),
-        insight_channel=_int(insight, "channel", 0),
-        video_port_base=_int(insight, "video_port_base", 9000),
-        metadata_port_base=_int(insight, "metadata_port_base", 9100),
-        bitrate_kbps=_int(insight, "bitrate_kbps", 2000),
         draw=load_draw_config(raw, defaults.draw),
         config_path=path,
     )
@@ -878,25 +852,6 @@ def validate_base(cfg: BaseConfig) -> None:
         )
     if cfg.video_fps < 0:
         raise ValueError("output.video.fps must be >= 0")
-    if cfg.insight_enable and not cfg.insight_host:
-        raise ValueError("output.insight.host must be set when insight is enabled")
-    # Two senders on one port is not a warning-level mistake: the H.264 encoder
-    # fails to configure, and because it shares the codec daemon with the
-    # decoder feeding the source, the whole pipeline stalls a few frames in.
-    # That looks like "the output video is 12 frames long", which is a long way
-    # from the actual cause.
-    if cfg.insight_enable and cfg.video_port_base == cfg.metadata_port_base:
-        raise ValueError(
-            f"output.insight.video_port_base and metadata_port_base are both "
-            f"{cfg.video_port_base}. They must differ; the defaults are 9000 and 9100.\n"
-            f"  Sharing a port wedges the encoder, which stalls the source and "
-            f"truncates the recording."
-        )
-    if cfg.insight_enable and 9900 in (cfg.video_port_base, cfg.metadata_port_base):
-        raise ValueError(
-            "output.insight port base 9900 is the Neat Insight web UI port, not a "
-            "stream port.\n  Use video_port_base: 9000 and metadata_port_base: 9100."
-        )
     if not 0.0 <= cfg.draw.mask_alpha <= 1.0:
         raise ValueError("visualization.mask_alpha must be in [0.0, 1.0]")
 

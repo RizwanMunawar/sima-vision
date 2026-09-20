@@ -355,13 +355,11 @@ class TaskRuntime:
 
     Attributes:
         output_label: Public output the loop pulls, such as ``detector_output``.
-        stream: Insight stream name, such as ``object-detection``.
         unit: Plural noun for the heartbeat and the profile line.
         stage: Name of the task's own profiling stage, or "" for none.
     """
 
     output_label = "detector_output"
-    stream = "objects"
     unit = "detections"
     stage = ""
 
@@ -404,10 +402,6 @@ class TaskRuntime:
 
     def render(self, cfg, pipeline: Pipeline, frame, results, fps: float):
         """Draw one frame's overlay. Runs on the sink thread."""
-        raise NotImplementedError
-
-    def metadata(self, pipeline: Pipeline, results) -> list[dict]:
-        """The Insight JSON payload for one frame's results."""
         raise NotImplementedError
 
     def summarise(self, pipeline: Pipeline, processed: int) -> list[str]:
@@ -660,12 +654,6 @@ def report_recording(cfg, pipeline: Pipeline, timeouts: int) -> None:
     causes = []
     if cfg.frames:
         causes.append(f"runtime.frames is {cfg.frames}, which capped the run.")
-    if cfg.insight_enable:
-        causes.append(
-            "output.insight.enable is true. Its H.264 encoder shares the codec "
-            "daemon with the decoder feeding the source, so a failing encoder "
-            "stalls the run. Set it to false; the recording does not need it."
-        )
     if timeouts:
         causes.append(
             f"the source stopped producing frames ({timeouts} timeout(s)), so "
@@ -704,10 +692,7 @@ def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime,
         Frames processed across every piece.
     """
     profile = ProfileWindow(cfg.profile, cfg.profile_interval, task.stage, task.unit)
-    sinks = SinkWorker(
-        cfg, pipeline, sink_depth_for(cfg, pipeline), task.render, task.stream,
-        task.metadata,
-    )
+    sinks = SinkWorker(cfg, pipeline, sink_depth_for(cfg, pipeline), task.render)
     timing = SourceTiming()
     processed = timeouts = recovered = 0
     try:
@@ -748,15 +733,4 @@ def run_pipeline(pipeline: Pipeline, cfg, stopper: Stopper, task: TaskRuntime,
     for line in timing_report(cfg, pipeline, timing):
         console.warn(line)
 
-    if pipeline.metadata_sender is not None:
-        stats = pipeline.metadata_sender.stats()
-        console.report(
-            f"metadata: sent={stats.datagrams_sent} failures={stats.send_failures} "
-            f"would_block={stats.would_block}"
-        )
-    if pipeline.video_dropped:
-        console.report(
-            f"insight: dropped {pipeline.video_dropped} preview frames because the "
-            f"feed was busy. The recording is unaffected."
-        )
     return processed

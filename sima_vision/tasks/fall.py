@@ -969,27 +969,6 @@ class FallRuntime(TaskRuntime):
             draw_fps(annotated, fps, cfg.draw)
         return annotated
 
-    def metadata(self, pipeline: FallPipeline, results) -> list[dict]:
-        labels = pipeline.labels
-        objects = []
-        for track in results:
-            class_id = int(track.box["class_id"])
-            objects.append(
-                {
-                    "id": f"track_{track.track_id}",
-                    "label": labels[class_id] if 0 <= class_id < len(labels) else "unknown",
-                    "confidence": float(track.box["score"]),
-                    "bbox": [
-                        float(track.box["x1"]), float(track.box["y1"]),
-                        float(track.box["x2"] - track.box["x1"]),
-                        float(track.box["y2"] - track.box["y1"]),
-                    ],
-                    "state": track.state,
-                    "aspect": round(track.aspect, 2),
-                }
-            )
-        return objects
-
     def summarise(self, pipeline: FallPipeline, processed: int) -> list[str]:
         return [f"falls={pipeline.falls}"]
 
@@ -1017,7 +996,6 @@ class FallTask(Task):
         family="yolo26",
         save_dir="frames",
         video_path="falls.mp4",
-        insight_enable=False,
         draw=FALL_DRAW,
     )
 

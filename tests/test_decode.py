@@ -191,17 +191,6 @@ def test_detect_decode_returns_a_bgr_frame_and_boxes():
     assert stage == 0.0
 
 
-def test_detect_metadata_names_the_classes():
-    task = TASKS["detect"]()
-    cfg = task.load(None, {"model.path": "m", "source.uri": "c"}, use_file=False)
-    pipeline = detect_pipeline()
-    runtime = task.runtime(cfg, pipeline)
-    _, boxes, _ = runtime.decode(pipeline, cfg, joined(BOXES), 1)
-    objects = runtime.metadata(pipeline, boxes)
-    assert [o["label"] for o in objects] == ["person", "car"]
-    assert objects[0]["bbox"] == [10.0, 5.0, 20.0, 30.0]
-
-
 # ── fall ──
 
 
@@ -287,17 +276,6 @@ def test_the_fall_pipeline_closes_its_alert_sender():
     assert pipeline.alerts is not None
     pipeline.close()
     assert pipeline.alerts is None, "close must drain and drop the sender"
-
-
-def test_fall_metadata_carries_the_state():
-    task, cfg, pipeline = fall_setup()
-    runtime = task.runtime(cfg, pipeline)
-    _, tracks, _ = runtime.decode(
-        pipeline, cfg, joined([person(50, 40, 30, 90)], 200, 400), 1
-    )
-    objects = runtime.metadata(pipeline, tracks)
-    assert objects and objects[0]["state"] in {"upright", "falling", "fallen", "recovering"}
-    assert objects[0]["id"].startswith("track_")
 
 
 # ── segment ──
@@ -404,15 +382,6 @@ def test_segment_describes_the_output_once(capsys):
     printed = capsys.readouterr().out
     assert printed.count("model output tensors") == 1, "the dump is a one-off"
     assert "packed layout" in printed
-
-
-def test_segment_metadata_carries_the_mask_area():
-    task, cfg, pipeline = segment_setup()
-    runtime = task.runtime(cfg, pipeline)
-    _, instances, _ = runtime.decode(pipeline, cfg, segment_sample(BOXES), 1)
-    objects = runtime.metadata(pipeline, instances)
-    assert objects[0]["mask_area"] > 0
-    assert objects[0]["foreground"] is True
 
 
 def test_keep_classes_marks_only_those_as_foreground():

@@ -16,7 +16,7 @@ from ..samples import (
     joined_field,
     parse_boxes,
 )
-from ..sinks import Pipeline, box_metadata
+from ..sinks import Pipeline
 from .base import Task
 
 DETECT_DRAW = DrawConfig(box_thickness=3, centre_dot=True)
@@ -51,9 +51,6 @@ class DetectRuntime(TaskRuntime):
             draw_fps(annotated, fps, cfg.draw)
         return annotated
 
-    def metadata(self, pipeline: Pipeline, results) -> list[dict]:
-        return box_metadata(results, pipeline.labels, pipeline.frame_w, pipeline.frame_h)
-
 
 class DetectTask(Task):
     name = "detect"
@@ -66,7 +63,6 @@ class DetectTask(Task):
         family="yolo26",
         save_dir="frames",
         video_path="detections.mp4",
-        insight_enable=False,
         draw=DETECT_DRAW,
     )
 

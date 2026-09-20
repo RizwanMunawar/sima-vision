@@ -1,14 +1,13 @@
 """What happens to a frame once the MLA is done with it.
 
-Three destinations, all optional and all independent: an annotated video on the
-DevKit, annotated stills, and a live Neat Insight feed over UDP. :class:`Pipeline`
-owns every handle so teardown has one place to look, and :class:`SinkWorker`
-runs the expensive part on a thread of its own.
+Two destinations, both optional and independent: an annotated video on the
+DevKit and annotated stills. :class:`Pipeline` owns every handle so teardown has
+one place to look, and :class:`SinkWorker` runs the expensive part on a thread of
+its own.
 """
 
 from __future__ import annotations
 
-import json
 import queue
 import threading
 from dataclasses import dataclass, field
@@ -16,7 +15,6 @@ from pathlib import Path
 
 from . import runtime
 from .console import console, human_bytes
-from .neat import build_video_graph
 from .recorder import NeatVideoWriter
 from .runtime import time_ms
 from .samples import FrameStamp
@@ -36,43 +34,31 @@ class Pipeline:
         graph: The task ``Graph``. Never read after it is set, and it still
             has to be here: ``graph.build()`` hands back a ``Run`` that keeps
             using the C++ object behind the graph, so dropping the last Python
-            reference would let it be collected out from under a live run. The
-            same goes for ``video_graph``. A dead-code pass will offer to
-            delete both; do not.
+            reference would let it be collected out from under a live run. A
+            dead-code pass will offer to delete it; do not.
         run: Live ``Run`` handle for the task graph.
-        video_graph: Separate graph that encodes frames for Insight. Held for
-            the same reason as ``graph``.
-        video_run: Live ``Run`` handle for the video graph.
-        metadata_sender: ``MetadataSender`` publishing results as JSON.
         labels: Class names, indexed by class id.
         frame_w: Source frame width in pixels.
         frame_h: Source frame height in pixels.
         fps: Source frame rate.
         source_frames: Coded pictures in the source file, counted before the
             run. 0 for a live source, where there is no such number.
-        video_port: Resolved UDP port for the Insight video feed.
         writer: OpenCV ``VideoWriter`` for the on-device recording.
         writer_path: Path the writer actually opened, after any fallback.
         writer_frames: Frames written so far.
-        video_dropped: Preview frames the Insight feed refused.
     """
 
     model: object = None
     graph: object = None
     run: object = None
-    video_graph: object = None
-    video_run: object = None
-    metadata_sender: object = None
     labels: list[str] = field(default_factory=list)
     frame_w: int = 0
     frame_h: int = 0
     fps: int = 0
     source_frames: int = 0
-    video_port: int = 0
     writer: object = None
     writer_path: str = ""
     writer_frames: int = 0
-    video_dropped: int = 0
 
     def close_extras(self) -> None:
         """Hook for subclasses. Runs before the writer and the Run are closed."""
@@ -90,11 +76,9 @@ class Pipeline:
             except Exception as exc:
                 console.warn(f"closing the video writer failed: {exc}")
             self.writer = None
-        for handle in (self.video_run, self.run):
-            if handle is None:
-                continue
+        if self.run is not None:
             try:
-                handle.close()
+                self.run.close()
             except Exception as exc:  # pragma: no cover - teardown must not mask errors
                 console.warn(f"close failed: {exc}")
 
@@ -156,94 +140,6 @@ def open_video_writer(cfg, width: int, height: int, fps: int):
     return writer, str(fallback)
 
 
-def start_insight(cfg, pipeline: Pipeline, width: int, height: int, fps: int, step) -> None:
-    """Bring up the Insight video and metadata senders on ``pipeline``."""
-    pyneat = runtime.pyneat
-    pipeline.video_graph, pipeline.video_run, pipeline.video_port = build_video_graph(
-        cfg, width, height, fps
-    )
-    metadata_options = pyneat.MetadataSenderOptions()
-    metadata_options.host = cfg.insight_host
-    metadata_options.channel = cfg.insight_channel
-    metadata_options.metadata_port_base = cfg.metadata_port_base
-    pipeline.metadata_sender = pyneat.MetadataSender(metadata_options)
-    step.detail(
-        f"insight: host={cfg.insight_host} video={pipeline.video_port} "
-        f"metadata={pipeline.metadata_sender.metadata_port()} "
-        f"channel={cfg.insight_channel}"
-    )
-    step.note(f"view at https://localhost:9900 and select channel {cfg.insight_channel}")
-
-
-def send_metadata(pipeline: Pipeline, stamp: FrameStamp, stream: str, objects: list[dict]) -> None:
-    """Publish one frame's results as JSON over UDP, if Insight is running."""
-    if pipeline.metadata_sender is None:
-        return
-    timestamp_ms = int(stamp.pts_ns // 1_000_000) if stamp.pts_ns >= 0 else -1
-    frame_id = str(stamp.frame_id) if stamp.frame_id >= 0 else ""
-    pipeline.metadata_sender.send_metadata(
-        stream,
-        json.dumps({"objects": objects}, separators=(",", ":")),
-        timestamp_ms,
-        frame_id,
-    )
-
-
-def box_metadata(boxes: list[dict], labels: list[str], w: int, h: int) -> list[dict]:
-    """The plain box form of the Insight metadata payload."""
-    objects = []
-    for index, box in enumerate(boxes, start=1):
-        x = max(0, int(box["x1"]))
-        y = max(0, int(box["y1"]))
-        bw = min(max(0, int(box["x2"] - box["x1"])), w - x)
-        bh = min(max(0, int(box["y2"] - box["y1"])), h - y)
-        class_id = int(box["class_id"])
-        objects.append(
-            {
-                "id": f"obj_{index}",
-                "label": labels[class_id] if 0 <= class_id < len(labels) else "unknown",
-                "confidence": float(box["score"]),
-                "bbox": [float(x), float(y), float(max(0, bw)), float(max(0, bh))],
-            }
-        )
-    return objects
-
-
-def push_video(pipeline: Pipeline, stamp: FrameStamp, frame_bgr) -> None:
-    """Send one frame to the Insight preview, dropping it if the feed is busy.
-
-    Best effort by design. A refused push means the encoder or UDP egress is
-    behind; skipping that frame keeps inference and the recording at full rate,
-    which matters more than a complete preview.
-
-    Args:
-        pipeline: Live pipeline, whose ``video_run`` may be None.
-        stamp: Timing fields copied from the source sample.
-        frame_bgr: BGR image to send.
-    """
-    cv2, np, pyneat = runtime.cv2, runtime.np, runtime.pyneat
-    if pipeline.video_run is None:
-        return
-    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    tensor = pyneat.Tensor.from_numpy(
-        np.ascontiguousarray(rgb),
-        copy=True,
-        image_format=pyneat.PixelFormat.RGB,
-        memory=pyneat.TensorMemory.EV74,
-    )
-    video_sample = pyneat.make_tensor_sample("", tensor)
-    video_sample.pts_ns = stamp.pts_ns
-    video_sample.dts_ns = stamp.dts_ns
-    video_sample.duration_ns = stamp.duration_ns
-    video_sample.frame_id = stamp.frame_id
-    video_sample.stream_id = stamp.stream_id
-    try:
-        if not pipeline.video_run.push([video_sample]):
-            pipeline.video_dropped += 1
-    except Exception:
-        pipeline.video_dropped += 1
-
-
 def wants_jpeg(cfg, index: int) -> bool:
     return cfg.save_enable and cfg.save_every > 0 and index % cfg.save_every == 0
 
@@ -252,7 +148,6 @@ def wants_annotated(cfg, pipeline: Pipeline, need_jpeg: bool) -> bool:
     """Whether any sink on this frame needs the overlay rendered."""
     return bool(
         pipeline.writer is not None
-        or (cfg.insight_enable and cfg.insight_annotated)
         or (need_jpeg and cfg.save_overlay)
     )
 
@@ -317,22 +212,17 @@ class SinkWorker:
         blocked_ms: Total time ``submit`` spent waiting for a free slot.
     """
 
-    def __init__(self, cfg, pipeline: Pipeline, depth: int, render, stream: str,
-                 metadata) -> None:
+    def __init__(self, cfg, pipeline: Pipeline, depth: int, render) -> None:
         """
         Args:
             cfg: Application configuration.
             pipeline: Live pipeline.
             depth: Queue depth, from ``runtime.queue_depth``.
             render: ``(cfg, pipeline, frame, results, fps) -> annotated frame``.
-            stream: Insight stream name, such as ``object-detection``.
-            metadata: ``(pipeline, results) -> list[dict]`` for the Insight feed.
         """
         self.cfg = cfg
         self.pipeline = pipeline
         self.render = render
-        self.stream = stream
-        self.metadata = metadata
         self.queue: queue.Queue = queue.Queue(maxsize=max(1, depth))
         self.error: BaseException | None = None
         self.blocked_ms = 0.0
@@ -378,14 +268,6 @@ class SinkWorker:
             if need_annotated
             else None
         )
-
-        # With insight_annotated the viewer shows our overlay. Without it,
-        # Insight receives the raw frame and draws its own from the metadata.
-        push_video(
-            pipeline, job.stamp,
-            annotated if (cfg.insight_annotated and annotated is not None) else job.frame,
-        )
-        send_metadata(pipeline, job.stamp, self.stream, self.metadata(pipeline, job.results))
 
         if pipeline.writer is not None:
             pipeline.writer.write(annotated)
