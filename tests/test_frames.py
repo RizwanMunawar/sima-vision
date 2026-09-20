@@ -702,7 +702,7 @@ def test_zero_still_means_follow_the_caption():
 # ─────────────────────────────────────────────────────────────────────────────
 
 #: The palette as it was specified, in the order it was given.
-PALETTE_HEX = ["F28C28", "05299E", "46237A", "080708"]
+PALETTE_HEX = ["806600", "05299E", "46237A", "080708"]
 
 
 def bgr_of(hex_rgb: str) -> tuple[int, int, int]:
@@ -725,7 +725,7 @@ def test_the_class_palette_is_the_one_that_was_specified():
 def test_class_colours_cycle_and_are_stable():
     from sima_vision.draw import CLASS_COLORS, class_color
 
-    assert class_color(0) == bgr_of("F28C28")
+    assert class_color(0) == bgr_of("806600")
     assert class_color(1) == bgr_of("05299E")
     assert class_color(len(CLASS_COLORS)) == class_color(0)
     assert class_color(79) == CLASS_COLORS[79 % len(CLASS_COLORS)]
@@ -752,19 +752,30 @@ def test_every_class_colour_gets_a_readable_caption():
         assert ratio >= MIN_CONTRAST, f"{ink} on {color} is only {ratio:.1f}:1"
 
 
-def test_the_ink_only_moves_where_white_would_fail():
-    """The override is a repair, not a restyle.
+def test_todays_palette_needs_no_override():
+    """Every current band carries white, so the ink never moves in practice.
 
-    Every band that already carried white keeps it; a caption turning black
-    over a colour that was never a problem is a worse surprise than the one
-    this fixes.
+    Worth stating rather than leaving implicit: it is what makes the override
+    a guard rather than something the palette is quietly leaning on.
     """
-    from sima_vision.draw import BLACK, WHITE, class_color, readable_text_color
+    from sima_vision.draw import WHITE, class_color, readable_text_color
 
-    # #F28C28: white is 2.5:1 there, black is 8.6:1.
-    assert readable_text_color(class_color(0), WHITE) == BLACK
-    for class_id in (1, 2, 3):
+    for class_id in range(4):
         assert readable_text_color(class_color(class_id), WHITE) == WHITE
+
+
+def test_the_guard_still_catches_a_light_band():
+    """And the guard works, which a palette of dark colours cannot show.
+
+    #F28C28 was in this palette one revision ago and would have been drawn
+    with white at 2.5:1 without this. It stands in for the next light colour
+    someone adds.
+    """
+    from sima_vision.draw import BLACK, WHITE, contrast_ratio, readable_text_color
+
+    orange = (40, 140, 242)                      # #F28C28
+    assert contrast_ratio(orange, WHITE) < 3.0
+    assert readable_text_color(orange, WHITE) == BLACK
 
 
 def test_a_configured_text_colour_is_honoured_while_it_is_readable():
@@ -774,8 +785,8 @@ def test_a_configured_text_colour_is_honoured_while_it_is_readable():
     amber = (0, 194, 255)
     # Dark bands take the configured amber, which clears the bar on them.
     assert readable_text_color((8, 7, 8), amber) == amber
-    # The orange does not, so it is overridden rather than left illegible.
-    assert readable_text_color((40, 140, 242), amber) == BLACK
+    # The dark yellow does not, so it is overridden rather than left illegible.
+    assert readable_text_color((11, 134, 184), amber) == BLACK
 
 
 def test_the_threshold_is_the_large_text_one():

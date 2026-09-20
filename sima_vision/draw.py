@@ -13,12 +13,12 @@ from . import runtime
 # beside each entry because that is how it was chosen and how it will be
 # checked against a design again.
 #
-# Mixed lightness on purpose, which is why the caption ink is chosen per band
-# rather than fixed: white on the orange is 2.5:1 and unreadable, black on it
-# is 8.6:1, and the opposite holds for the other three. See
-# `readable_text_color`.
+# All four take white captions comfortably -- 5.5:1 on the dark yellow, 20:1
+# on the near-black -- but that is a property of this palette, not a rule the
+# drawing relies on. `readable_text_color` picks the ink per band, so a lighter
+# colour dropped in here gets a readable caption instead of a washed-out one.
 CLASS_COLORS = [
-    (40, 140, 242),   # #F28C28
+    (0, 102, 128),    # #806600
     (158, 41, 5),     # #05299E
     (122, 35, 70),    # #46237A
     (8, 7, 8),        # #080708
@@ -85,15 +85,12 @@ def readable_text_color(band: tuple[int, int, int],
     overridden only when it would be unreadable, and then by whichever of black
     or white is further from the band.
 
-    This exists because the palette is no longer uniformly dark. White on
-    #F28C28 is 2.5:1 -- text you can see is there and cannot read -- while
-    black on it is 8.6:1; on #080708 that reverses, 20:1 against 1.04:1. One
-    fixed ink cannot serve both, and the band colour is the only thing that
-    knows which case it is.
-
-    In practice this fires on the orange and nothing else: every other band in
-    use, including the fall alert's red at 3.9:1, keeps the white it already
-    had.
+    Every band currently in use takes white, so this changes nothing today. It
+    is here because the palette is edited by hand and lightness is the thing
+    that gets picked last: white on #F28C28 is 2.5:1, text you can see is
+    there and cannot read, while black on it is 8.6:1 -- and on #080708 that
+    reverses, 20:1 against 1.04:1. One fixed ink cannot serve both, and the
+    band colour is the only thing that knows which case it is.
     """
     if contrast_ratio(band, preferred) >= MIN_CONTRAST:
         return preferred
