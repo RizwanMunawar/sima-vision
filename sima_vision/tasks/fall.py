@@ -39,7 +39,7 @@ from ..config import (
     _str_list,
 )
 from ..console import console
-from ..draw import draw_banner, draw_caption, draw_fps, draw_scale
+from ..draw import class_color, draw_banner, draw_caption, draw_fps, draw_scale
 from ..runloop import TaskRuntime
 from ..samples import (
     extract_bbox_payload,
@@ -54,12 +54,12 @@ from .base import Task
 
 UPRIGHT, FALLING, FALLEN, RECOVERING = "upright", "falling", "fallen", "recovering"
 
-STATE_COLORS = {
-    UPRIGHT: (98, 205, 0),        # green
-    FALLING: (0, 194, 255),       # amber
-    FALLEN: (56, 56, 255),        # red
-    RECOVERING: (227, 195, 0),    # cyan
-}
+#: The class a fallen track is relabelled to, and the colour that class draws
+#: in. Red rather than a palette entry: every other box on the frame is an
+#: ordinary detection, and this one is the reason the app exists. It is the
+#: banner's default fill, so the box and the strip across the bottom agree.
+FALL_CLASS = "FALL"
+FALL_COLOR = (56, 56, 255)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -738,34 +738,37 @@ class AlertSender:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def state_color(state: str) -> tuple[int, int, int]:
-    return STATE_COLORS.get(state, (200, 200, 200))
-
-
-#: What a fallen track's box says. The one word is the whole point of the
-#: frame: a caption that also carries an id, a state and a score buries it in
-#: exactly the moment someone is scanning for it.
-FALL_CAPTION = "FALL"
-
-
 def track_label(track: Track, labels: list[str]) -> str:
-    """The detected class name for a track, or ``person`` when unnamed."""
+    """What a track's box calls it.
+
+    A fallen track is relabelled to :data:`FALL_CLASS`; everything else is the
+    class the detector reported. The state machine's own words never appear --
+    `upright` and `recovering` are this program's internal vocabulary and mean
+    nothing to someone watching a corridor.
+    """
+    if track.state == FALLEN:
+        return FALL_CLASS
     class_id = int(track.box.get("class_id", 0))
     if 0 <= class_id < len(labels):
         return labels[class_id]
     return "person"
 
 
+def track_color(track: Track) -> tuple[int, int, int]:
+    """A fallen track's alert colour, or its ordinary class colour."""
+    if track.state == FALLEN:
+        return FALL_COLOR
+    return class_color(int(track.box.get("class_id", 0)))
+
+
 def track_caption(track: Track, draw, labels: list[str]) -> str:
     """Build the caption for one tracked person.
 
-    A fallen track says ``FALL`` and nothing else. Every other track says what
-    it is -- the class name off the detection, not the state machine's word for
-    it: `upright` is this program's internal vocabulary and means nothing to
-    someone watching a corridor.
+    The same shape as a detection's: the class, then the score. A fall is a
+    change of class, not a different kind of readout -- so a fallen person
+    reads `FALL 0.93` where they read `person 0.93` a second earlier, and
+    nothing else about the box moves except its colour.
     """
-    if track.state == FALLEN:
-        return FALL_CAPTION
     parts = []
     if draw.show_track_ids:
         parts.append(f"#{track.track_id}")
@@ -776,15 +779,20 @@ def track_caption(track: Track, draw, labels: list[str]) -> str:
     return " ".join(parts)
 
 
-def draw_tracks(frame, tracks: list[Track], draw, fall: FallConfig,
-                labels: list[str]) -> None:
-    """Draw every tracked person, coloured by state, in place.
+def draw_tracks(frame, tracks: list[Track], draw, labels: list[str]) -> None:
+    """Draw every tracked person as an ordinary detection, in place.
+
+    Deliberately the same picture `detect` draws: the class colour, a centre
+    dot, and a `class score` caption. A fall changes one thing, the class --
+    which changes the caption and the colour with it, and nothing else. The
+    intermediate states do not paint themselves: someone watching a corridor
+    is watching for a fall, and a box that changes colour twice on the way
+    there trains them to ignore it.
 
     Args:
         frame: BGR image, modified in place.
         tracks: Live tracks with their fall state already resolved.
         draw: Visualization settings.
-        fall: Fall settings. Kept for the box weight rules.
         labels: Class names, so a box says what was detected.
     """
     cv2 = runtime.cv2
@@ -803,17 +811,10 @@ def draw_tracks(frame, tracks: list[Track], draw, fall: FallConfig,
         if x2 <= x1 or y2 <= y1:
             continue
 
-        color = state_color(track.state)
-        # A fallen person gets a heavier box, so the frame reads correctly even
-        # in a thumbnail or a greyscale printout.
-        weight = thickness * 2 if track.state == FALLEN else thickness
+        color = track_color(track)
         if draw.centre_dot:
             cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, weight)
-
-        # No countdown on a pending fall any more. It read
-        # `#3 falling 0.8/1.5s`, which is four facts in the place where one is
-        # wanted, and the state is already in the box colour.
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
         draw_caption(frame, track_caption(track, draw, labels), (x1, y1),
                      color, draw, scale)
 
@@ -957,7 +958,7 @@ class FallRuntime(TaskRuntime):
     def render(self, cfg: FallAppConfig, pipeline: FallPipeline, frame, results, fps: float):
         """Draw once per frame and share the result between the video and JPEG sinks."""
         annotated = frame.copy()
-        draw_tracks(annotated, results, cfg.draw, cfg.fall, pipeline.labels)
+        draw_tracks(annotated, results, cfg.draw, pipeline.labels)
         down = [t for t in results if t.state == FALLEN]
         if cfg.draw.banner and down:
             ids = ", ".join(f"#{t.track_id}" for t in down)
@@ -979,8 +980,13 @@ class FallRuntime(TaskRuntime):
 # Ids and scores off: a fall frame is read at a glance, and `#3 person 0.87`
 # is two numbers in front of the one word that matters. Both are still
 # config flags for anyone tuning the tracker.
+# The same overlay `detect` draws, plus the alert banner. Scores are on
+# because a fall box is an ordinary detection box whose class happens to be
+# FALL, and `FALL` alone in the place a score usually sits reads as a different
+# kind of readout. Track ids stay off: they are this app's bookkeeping, not
+# something a detection carries.
 FALL_DRAW = DrawConfig(box_thickness=3, centre_dot=True, banner=True,
-                       show_track_ids=False, show_scores=False)
+                       show_track_ids=False, show_scores=True)
 
 
 class FallTask(Task):

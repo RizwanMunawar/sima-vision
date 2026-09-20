@@ -294,34 +294,32 @@ def _track(state, track_id=3, class_id=0, score=0.873):
     return fall.Track(track_id=track_id, box=box, state=state)
 
 
-def test_a_fallen_box_says_one_word():
-    """It is the only thing anyone is scanning the frame for.
+def test_a_fall_is_a_change_of_class():
+    """The whole visual change a fall makes.
 
-    The caption used to read `#3 fallen 0.87`: an id nobody asked for, the
-    state machine's own vocabulary, and a score -- with the one fact that
-    matters third in line and in lower case.
+    Everything else on the frame is an ordinary detection, so a fall reads as
+    one too: the same caption shape, with the class swapped. `person 0.87`
+    becomes `FALL 0.87`, and nothing else about the box moves but its colour.
     """
-    assert fall.track_caption(_track(fall.FALLEN), fall.FALL_DRAW, ["person"]) == "FALL"
+    assert fall.track_caption(_track(fall.UPRIGHT), fall.FALL_DRAW, ["person"]) == "person 0.87"
+    assert fall.track_caption(_track(fall.FALLEN), fall.FALL_DRAW, ["person"]) == "FALL 0.87"
 
 
-def test_an_upright_box_says_what_was_detected():
-    """The class name off the detection, not the state machine's word.
+def test_the_state_machines_own_words_never_reach_the_frame():
+    """`upright` and `recovering` are this program's internal vocabulary.
 
-    `upright` is this program's internal vocabulary. Someone watching a
-    corridor reads `person`.
+    Someone watching a corridor reads `person`, and only ever sees a second
+    word when that person is on the floor.
     """
-    caption = fall.track_caption(_track(fall.UPRIGHT), fall.FALL_DRAW, ["person"])
-    assert caption == "person"
-    assert fall.UPRIGHT not in caption
+    for state in (fall.UPRIGHT, fall.FALLING, fall.RECOVERING):
+        caption = fall.track_caption(_track(state), fall.FALL_DRAW, ["person"])
+        assert caption == "person 0.87", state
+        assert state not in caption
 
 
 def test_a_pending_fall_does_not_start_counting_in_the_caption():
-    """`person 0.8/1.5s` is four facts where one is wanted.
-
-    The state is already in the box colour, which is where it belongs.
-    """
+    """`person 0.8/1.5s` is a countdown in the place a score belongs."""
     caption = fall.track_caption(_track(fall.FALLING), fall.FALL_DRAW, ["person"])
-    assert caption == "person"
     assert "/" not in caption
 
 
@@ -329,21 +327,44 @@ def test_the_class_name_is_read_off_the_detection():
     """A model trained on other classes must not be captioned `person`."""
     labels = ["worker", "forklift", "pallet"]
     caption = fall.track_caption(_track(fall.UPRIGHT, class_id=1), fall.FALL_DRAW, labels)
-    assert caption == "forklift"
+    assert caption == "forklift 0.87"
 
 
 def test_an_unknown_class_id_does_not_crash_the_overlay():
     track = _track(fall.UPRIGHT, class_id=99)
-    assert fall.track_caption(track, fall.FALL_DRAW, ["person"]) == "person"
+    assert fall.track_caption(track, fall.FALL_DRAW, ["person"]) == "person 0.87"
 
 
-def test_ids_and_scores_are_off_by_default_but_still_available():
-    """Off for reading a frame, on for tuning a tracker."""
+def test_a_fallen_box_is_relabelled_whatever_it_was_detected_as():
+    """FALL replaces the class; it does not depend on the class being person."""
+    labels = ["worker", "forklift", "pallet"]
+    assert fall.track_label(_track(fall.FALLEN, class_id=1), labels) == fall.FALL_CLASS
+    assert fall.track_label(_track(fall.UPRIGHT, class_id=1), labels) == "forklift"
+
+
+def test_a_fallen_box_takes_the_alert_colour_and_the_rest_take_their_class():
+    """The colour is the other half of the class change.
+
+    Every other box is coloured exactly as `detect` would colour it, which is
+    what makes the red one mean something.
+    """
+    from sima_vision.draw import class_color
+
+    assert fall.track_color(_track(fall.FALLEN)) == fall.FALL_COLOR
+    for state in (fall.UPRIGHT, fall.FALLING, fall.RECOVERING):
+        assert fall.track_color(_track(state, class_id=2)) == class_color(2), state
+
+
+def test_scores_are_on_and_ids_are_off():
+    """Scores because a fall box is a detection box; ids because they are not.
+
+    `FALL` alone, in the place a score usually sits, reads as a different kind
+    of readout rather than the same one with a new class.
+    """
     from dataclasses import replace
 
+    assert fall.FALL_DRAW.show_scores is True
     assert fall.FALL_DRAW.show_track_ids is False
-    assert fall.FALL_DRAW.show_scores is False
-    verbose = replace(fall.FALL_DRAW, show_track_ids=True, show_scores=True)
+    verbose = replace(fall.FALL_DRAW, show_track_ids=True)
     assert fall.track_caption(_track(fall.UPRIGHT), verbose, ["person"]) == "#3 person 0.87"
-    # A fall still says FALL: the flags add detail, they do not bury the word.
-    assert fall.track_caption(_track(fall.FALLEN), verbose, ["person"]) == "FALL"
+    assert fall.track_caption(_track(fall.FALLEN), verbose, ["person"]) == "#3 FALL 0.87"
