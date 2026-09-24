@@ -140,9 +140,7 @@ fall:
 #   export FALL_ALERT_SMTP_PASSWORD='your-app-password'
 #
 # Sending runs on a background thread, so a slow or dead mail server can never
-# stall the pipeline. Check the wiring without waiting for a fall:
-#
-#   python3 src/app.py --test-alert
+# stall frame processing. Dry-run mode logs confirmed falls without sending.
 alerts:
   enable: off                # master switch
   dry_run: on                # compose and log, connect to nothing. Turn off to really send
@@ -150,12 +148,9 @@ alerts:
   site: "Warehouse camera 1" # where this camera is. Goes in the subject and body
   from: ""                   # e.g. alerts@example.com
   to: []                     # e.g. [safety@example.com, shift-lead@example.com]
-  subject: "[{site}] Fall detected - track #{track_id} at {time}"
 
   cooldown_seconds: 60       # minimum gap between alerts, across every track
-  attach_snapshot: on        # attach the annotated frame
-  snapshot_dir: alerts       # where those snapshots are written on the DevKit
-  queue_depth: 8             # pending alerts. Beyond this they are dropped, never blocked
+  # Text-only emails; at most one send in progress. Extra alerts are skipped.
 
   smtp:
     host: smtp.gmail.com

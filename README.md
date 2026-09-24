@@ -92,6 +92,35 @@ fall changes one thing, the class the box is labelled with, so a person reading 
 0.93` a second earlier now reads `FALL 0.93`. Each fall is also printed on the console and
 counted in the run summary.
 
+To enable SMTP emails, configure `alerts` in your fall YAML:
+
+```yaml
+alerts:
+  enable: on
+  dry_run: off
+  site: "Warehouse camera 1"
+  from: "alerts@example.com"
+  to: ["safety@example.com"]
+  cooldown_seconds: 60
+  smtp:
+    host: smtp.example.com
+    port: 587
+    starttls: on
+    ssl: off
+    username: "alerts@example.com"
+    password_env: FALL_ALERT_SMTP_PASSWORD
+    timeout: 20
+```
+
+Set `FALL_ALERT_SMTP_PASSWORD` in the environment running the app (use your
+provider's app password where required), then run
+`sima-vision fall --config path/to/fall.yaml`. Use `dry_run: on` to log alerts
+without sending. For implicit TLS, use port 465, `ssl: on`, and `starttls: off`.
+Text emails include the site, UTC detection time, track IDs, frame and source time.
+Sending runs in the background. The cooldown applies across all tracks, including
+failed attempts; alerts during the cooldown or an active send are skipped without
+automatic retries. A confirmed fall re-arms only after sustained recovery.
+
 </details>
 
 ## Apps arguments

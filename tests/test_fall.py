@@ -183,6 +183,25 @@ def test_a_fall_fires_once_not_every_frame():
         assert update_fall_states([track], fall, FRAME_H, t) == []
 
 
+def test_brief_recovery_does_not_report_the_same_fall_again():
+    cfg = FallConfig(confirm_seconds=0.1, recover_seconds=1.0)
+    track = Track(track_id=1, box=lying())
+    update_fall_states([track], cfg, FRAME_H, 0.0)
+    assert update_fall_states([track], cfg, FRAME_H, 0.2) == [track]
+    track.box = standing()
+    update_fall_states([track], cfg, FRAME_H, 0.3)
+    track.box = lying()
+    for now in (0.4, 0.6, 1.0):
+        assert update_fall_states([track], cfg, FRAME_H, now) == []
+    assert track.state == FALLEN
+    track.box = standing()
+    update_fall_states([track], cfg, FRAME_H, 2.0)
+    update_fall_states([track], cfg, FRAME_H, 3.1)
+    track.box = lying()
+    update_fall_states([track], cfg, FRAME_H, 3.2)
+    assert update_fall_states([track], cfg, FRAME_H, 3.4) == [track]
+
+
 def test_standing_back_up_moves_to_recovering_then_upright():
     fall = FallConfig(confirm_seconds=0.1, recover_seconds=1.0)
     track = Track(track_id=1, box=lying(), state=UPRIGHT, state_since=0.0)

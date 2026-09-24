@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..alerts import AlertConfig, FallAlerts, load_alert_config, validate_alerts
 from ..config import (
     BaseConfig,
     TaskDefaults,
@@ -128,6 +129,7 @@ class FallAppConfig(BaseConfig):
 
     track: TrackConfig = TrackConfig()
     fall: FallConfig = FallConfig()
+    alerts: AlertConfig = AlertConfig()
 
 
 def load_track_config(raw: dict) -> TrackConfig:
@@ -159,6 +161,7 @@ def load_fall_config(raw: dict) -> FallConfig:
 
 
 def validate_fall(cfg: FallAppConfig) -> None:
+    validate_alerts(cfg.alerts)
     if not 0.0 <= cfg.track.iou_threshold <= 1.0:
         raise ValueError("tracking.iou_threshold must be in [0.0, 1.0]")
     if cfg.track.max_age < 0:
@@ -234,7 +237,7 @@ class Track:
     upright_height: float = 0.0
     state: str = UPRIGHT
     state_since: float = 0.0
-    reported_at: float = 0.0
+    reported_at: float | None = None
 
     @property
     def width(self) -> float:
@@ -429,17 +432,21 @@ def update_fall_states(tracks: list[Track], fall: FallConfig, frame_h: int,
         down = looks_fallen(track, fall, frame_h)
         if track.state in (UPRIGHT, RECOVERING):
             if down:
-                track.state, track.state_since = FALLING, now
+                # A brief apparent recovery must not re-arm an already reported fall.
+                track.state = FALLEN if track.reported_at is not None else FALLING
+                track.state_since = now
             elif (
                 track.state == RECOVERING
                 and now - track.state_since >= fall.recover_seconds
             ):
                 track.state, track.state_since = UPRIGHT, now
+                track.reported_at = None
         elif track.state == FALLING:
             if not down:
                 track.state, track.state_since = RECOVERING, now
             elif now - track.state_since >= fall.confirm_seconds:
                 track.state, track.state_since = FALLEN, now
+                track.reported_at = now
                 newly.append(track)
         elif track.state == FALLEN:
             if not down:
@@ -522,6 +529,7 @@ class FallPipeline(Pipeline):
     tracker: object = None
     fall_class_ids: object = None
     falls: int = 0
+    alerts: FallAlerts | None = None
 
 def person_boxes(cfg: FallAppConfig, pipeline: FallPipeline, boxes: list[dict],
                  frame_h: int) -> list[dict]:
@@ -572,12 +580,7 @@ class FallRuntime(TaskRuntime):
 
     def report_falls(self, pipeline: FallPipeline, cfg: FallAppConfig,
                      fallen_now: list[Track], index: int, now: float) -> None:
-        """Count and log each track that just crossed into FALLEN.
-
-        A line on the console and a number in the run summary. There is no
-        sending here any more: the frame says FALL, the recording keeps it, and
-        anything that wants to act on it can watch this output.
-        """
+        """Count, log and optionally email newly confirmed falls."""
         for track in fallen_now:
             pipeline.falls += 1
             signals = fall_signals(track, cfg.fall, pipeline.frame_h)
@@ -587,6 +590,9 @@ class FallRuntime(TaskRuntime):
                 f"descent={signals['descent_value']}px/s"
             )
             track.reported_at = now
+        if fallen_now and pipeline.alerts is not None:
+            details = "; ".join(f"track #{track.track_id}" for track in fallen_now)
+            pipeline.alerts.notify(f"{details}; frame {index}; source time {now:.2f}s")
 
     def render(self, cfg: FallAppConfig, pipeline: FallPipeline, frame, results, fps: float):
         """Draw once per frame and share the result between the video and JPEG sinks.
@@ -647,6 +653,7 @@ class FallTask(Task):
         return {
             "track": load_track_config(raw),
             "fall": load_fall_config(raw),
+            "alerts": load_alert_config(raw),
         }
 
     def validate(self, cfg: FallAppConfig) -> None:
@@ -668,6 +675,7 @@ class FallTask(Task):
     def make_pipeline(self, cfg: FallAppConfig, labels: list[str]) -> FallPipeline:
         return FallPipeline(
             labels=labels,
+            alerts=FallAlerts(cfg.alerts) if cfg.alerts.enable else None,
             tracker=Tracker(cfg.track),
             fall_class_ids=resolve_classes(
                 cfg.track.classes, labels, "tracking.classes", cfg.labels_path
