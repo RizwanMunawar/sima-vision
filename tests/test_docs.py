@@ -94,7 +94,7 @@ def flags_in(text: str) -> set[str]:
     return {
         flag
         for chunk in spans + blocks
-        for flag in re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]+)", chunk)
+        for flag in re.findall(r"(?<![\w-])(--[a-z][a-z0-9_-]+)", chunk)
     }
 
 
@@ -325,7 +325,7 @@ def test_the_flags_table_lists_every_flag():
     start = text.index("## Apps arguments")
     end = text.index(chr(10) + "## ", start + 1)
     table = text[start:end]
-    documented = set(re.findall(r"`(--[a-z][a-z0-9-]*)", table))
+    documented = set(re.findall(r"`(--[a-z][a-z0-9_-]*)", table))
 
     missing = sorted(real - documented)
     assert not missing, f"the flags table is missing: {missing}"

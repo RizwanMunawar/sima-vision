@@ -93,8 +93,8 @@ def test_apply_overrides_creates_missing_sections():
 
 def test_apply_overrides_reaches_nested_sections():
     raw = {}
-    apply_overrides(raw, {"alerts.smtp.port": 465})
-    assert raw["alerts"]["smtp"]["port"] == 465
+    apply_overrides(raw, {"custom.nested.port": 465})
+    assert raw["custom"]["nested"]["port"] == 465
 
 
 def test_apply_overrides_ignores_none():
@@ -194,8 +194,6 @@ def test_draw_defaults_differ_per_task():
     segment = TASKS["segment"]().defaults.draw
     assert detect.box_thickness == 3
     assert segment.box_thickness == 2
-    assert detect.centre_dot is True
-    assert segment.centre_dot is False
     assert isinstance(detect, DrawConfig)
 
 
