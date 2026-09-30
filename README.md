@@ -92,6 +92,8 @@ fall changes one thing, the class the box is labelled with, so a person reading 
 0.93` a second earlier now reads `FALL 0.93`. Each fall is also printed on the console and
 counted in the run summary.
 
+A confirmed fall re-arms only after sustained recovery.
+
 </details>
 
 ## Apps arguments

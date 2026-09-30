@@ -1,4 +1,4 @@
-# SiMa Neat fall detection with SMTP alerts
+# SiMa Neat fall detection
 #
 # Every setting below is the built-in default written out, so deleting a line
 # changes nothing. Paths are relative to the directory you launch from.
@@ -118,7 +118,7 @@ tracking:
 #
 # Any one can fire spuriously for a frame or two, so nothing is reported until
 # it has held for confirm_seconds. That delay is the difference between a
-# useful alert and one nobody reads.
+# useful report and one nobody reads.
 fall:
   enable: on                 # off = plain person tracking, useful while tuning
 
@@ -131,40 +131,6 @@ fall:
   recover_seconds: 3.0       # upright for this long before the track re-arms
 
   min_box_height: 0.08       # ignore people shorter than 8% of the frame
-
-# Email when a fall is confirmed.
-#
-# There is no password key here on purpose: this file is committed to git, and
-# a password in it is a password on GitHub. Export it instead:
-#
-#   export FALL_ALERT_SMTP_PASSWORD='your-app-password'
-#
-# Sending runs on a background thread, so a slow or dead mail server can never
-# stall the pipeline. Check the wiring without waiting for a fall:
-#
-#   python3 src/app.py --test-alert
-alerts:
-  enable: off                # master switch
-  dry_run: on                # compose and log, connect to nothing. Turn off to really send
-
-  site: "Warehouse camera 1" # where this camera is. Goes in the subject and body
-  from: ""                   # e.g. alerts@example.com
-  to: []                     # e.g. [safety@example.com, shift-lead@example.com]
-  subject: "[{site}] Fall detected - track #{track_id} at {time}"
-
-  cooldown_seconds: 60       # minimum gap between alerts, across every track
-  attach_snapshot: on        # attach the annotated frame
-  snapshot_dir: alerts       # where those snapshots are written on the DevKit
-  queue_depth: 8             # pending alerts. Beyond this they are dropped, never blocked
-
-  smtp:
-    host: smtp.gmail.com
-    port: 587                # 587 with starttls, 465 with ssl, 25 for a plain relay
-    starttls: on
-    ssl: off                 # implicit TLS instead of starttls. Never both
-    username: ""             # empty = unauthenticated relay
-    password_env: FALL_ALERT_SMTP_PASSWORD
-    timeout: 20
 
 runtime:
   frames: 0                  # 0 = run until interrupted
@@ -206,9 +172,6 @@ visualization:
   text_scale: 1.0            # caption font size multiplier
   text_thickness: 2          # caption stroke weight
   text_padding: 10           # gap between caption text and the edge of its band
-
-  centre_dot: on             # filled dot at the centre of each box
-  centre_dot_radius: 7
 
   show_track_ids: on         # "#7" in the caption, so you can follow one person
   show_labels: on            # the fall state in the caption: upright/falling/fallen

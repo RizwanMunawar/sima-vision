@@ -19,7 +19,7 @@ from ..samples import (
 from ..sinks import Pipeline
 from .base import Task
 
-DETECT_DRAW = DrawConfig(box_thickness=3, centre_dot=True)
+DETECT_DRAW = DrawConfig(box_thickness=3)
 
 
 class DetectRuntime(TaskRuntime):

@@ -310,8 +310,6 @@ class DrawConfig:
         text_thickness: Caption stroke weight in pixels, at
             ``reference_height``. Defaults to :data:`TEXT_THICKNESS`.
         text_padding: Gap between caption text and the edge of its band.
-        centre_dot: Whether to mark the centre of each box. ``detect``, ``fall``.
-        centre_dot_radius: Radius of that marker, in pixels.
         show_labels: Whether the caption carries the class name.
         show_scores: Whether the caption carries the confidence.
         score_decimals: Decimal places for the confidence, so 2 gives ``0.57``.
@@ -354,8 +352,6 @@ class DrawConfig:
     text_scale: float = TEXT_SCALE
     text_thickness: int = TEXT_THICKNESS
     text_padding: int = 10
-    centre_dot: bool = True
-    centre_dot_radius: int = 7
     show_labels: bool = True
     show_scores: bool = True
     score_decimals: int = 2
@@ -415,8 +411,6 @@ def load_draw_config(raw: dict, default: DrawConfig | None = None) -> DrawConfig
         text_scale=_float(section, "text_scale", default.text_scale),
         text_thickness=_int(section, "text_thickness", default.text_thickness),
         text_padding=_int(section, "text_padding", default.text_padding),
-        centre_dot=_flag(section, "centre_dot", "on" if default.centre_dot else "off") == "on",
-        centre_dot_radius=_int(section, "centre_dot_radius", default.centre_dot_radius),
         show_labels=_flag(section, "show_labels", "on" if default.show_labels else "off") == "on",
         show_scores=_flag(section, "show_scores", "on" if default.show_scores else "off") == "on",
         score_decimals=_int(section, "score_decimals", default.score_decimals),

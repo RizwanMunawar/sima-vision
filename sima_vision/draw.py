@@ -220,10 +220,10 @@ def draw_caption(frame, text: str, anchor: tuple[int, int], color, draw, scale: 
 
 
 def draw_boxes(frame, boxes: list[dict], labels: list[str], draw) -> None:
-    """Draw detection boxes, centre markers and labelled captions in place.
+    """Draw detection boxes and labelled captions in place.
 
-    Each box is a plain rectangle in the class colour, with a centre dot and a
-    filled caption sitting directly above it.
+    Each box is a plain rectangle in the class colour, with a filled caption
+    sitting directly above it.
 
     Args:
         frame: BGR image, modified in place.
@@ -236,7 +236,6 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str], draw) -> None:
     h, w = frame.shape[:2]
     scale = draw_scale(frame, draw)
     thickness = max(1, int(round(draw.box_thickness * scale)))
-    radius = max(2, int(round(draw.centre_dot_radius * scale)))
 
     # Paint larger boxes first, so small foreground objects stay legible.
     ordered = sorted(
@@ -252,8 +251,6 @@ def draw_boxes(frame, boxes: list[dict], labels: list[str], draw) -> None:
 
         color = class_color(int(box["class_id"]))
 
-        if draw.centre_dot:
-            cv2.circle(frame, ((x1 + x2) // 2, (y1 + y2) // 2), radius, color, -1)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
         draw_caption(frame, caption_text(box, labels, draw), (x1, y1), color, draw, scale)

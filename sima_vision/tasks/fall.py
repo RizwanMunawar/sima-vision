@@ -234,7 +234,7 @@ class Track:
     upright_height: float = 0.0
     state: str = UPRIGHT
     state_since: float = 0.0
-    reported_at: float = 0.0
+    reported_at: float | None = None
 
     @property
     def width(self) -> float:
@@ -429,17 +429,21 @@ def update_fall_states(tracks: list[Track], fall: FallConfig, frame_h: int,
         down = looks_fallen(track, fall, frame_h)
         if track.state in (UPRIGHT, RECOVERING):
             if down:
-                track.state, track.state_since = FALLING, now
+                # A brief apparent recovery must not re-arm an already reported fall.
+                track.state = FALLEN if track.reported_at is not None else FALLING
+                track.state_since = now
             elif (
                 track.state == RECOVERING
                 and now - track.state_since >= fall.recover_seconds
             ):
                 track.state, track.state_since = UPRIGHT, now
+                track.reported_at = None
         elif track.state == FALLING:
             if not down:
                 track.state, track.state_since = RECOVERING, now
             elif now - track.state_since >= fall.confirm_seconds:
                 track.state, track.state_since = FALLEN, now
+                track.reported_at = now
                 newly.append(track)
         elif track.state == FALLEN:
             if not down:
@@ -480,7 +484,7 @@ def overlay_boxes(tracks: list[Track], labels: list[str],
 
     This is the whole of what fall detection does to a frame. There is no
     fall-specific drawing: the boxes go through ``draw_boxes`` exactly as
-    ``detect``'s do, so the palette, the captions, the centre dots and the
+    ``detect``'s do, so the palette, the captions and the
     ordering are the same code and cannot drift apart.
 
     Args:
@@ -522,6 +526,7 @@ class FallPipeline(Pipeline):
     tracker: object = None
     fall_class_ids: object = None
     falls: int = 0
+
 
 def person_boxes(cfg: FallAppConfig, pipeline: FallPipeline, boxes: list[dict],
                  frame_h: int) -> list[dict]:
@@ -572,12 +577,7 @@ class FallRuntime(TaskRuntime):
 
     def report_falls(self, pipeline: FallPipeline, cfg: FallAppConfig,
                      fallen_now: list[Track], index: int, now: float) -> None:
-        """Count and log each track that just crossed into FALLEN.
-
-        A line on the console and a number in the run summary. There is no
-        sending here any more: the frame says FALL, the recording keeps it, and
-        anything that wants to act on it can watch this output.
-        """
+        """Count and log newly confirmed falls."""
         for track in fallen_now:
             pipeline.falls += 1
             signals = fall_signals(track, cfg.fall, pipeline.frame_h)

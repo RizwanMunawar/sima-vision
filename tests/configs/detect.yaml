@@ -132,9 +132,6 @@ visualization:
   text_thickness: 2          # caption stroke weight
   text_padding: 10           # gap between caption text and the edge of its band
 
-  centre_dot: on             # filled dot at the centre of each box
-  centre_dot_radius: 7
-
   show_labels: on            # class name in the caption
   show_scores: on            # confidence in the caption
   score_decimals: 2          # 2 gives "person 0.57", 0 gives "person 1"
