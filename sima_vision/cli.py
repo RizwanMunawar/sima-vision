@@ -240,6 +240,10 @@ def add_shared_arguments(parser: argparse.ArgumentParser) -> None:
              "override a config file that turns them on.",
     )
     out.add_argument(
+        "--show-fps", dest="output.video.hud", action="store_const", const=True,
+        help="Show the FPS badge on the overlay. Hidden by default.",
+    )
+    out.add_argument(
         "--no-hud", dest="output.video.hud", action="store_const", const=False,
         help="Leave the frame-rate badge off the overlay.",
     )

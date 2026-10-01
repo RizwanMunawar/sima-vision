@@ -462,7 +462,8 @@ def render_case(app: str):
     from sima_vision.tasks import TASKS
 
     cfg = TASKS[app]().load(
-        None, {"model.path": "m.tar.gz", "source.uri": "c.h264"}, use_file=False
+        None, {"model.path": "m.tar.gz", "source.uri": "c.h264",
+               "output.video.hud": True}, use_file=False
     )
     pipeline = types.SimpleNamespace(labels=["person", "bike", "car"],
                                      fall_class_ids=None)

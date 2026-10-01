@@ -176,7 +176,7 @@ output:
     path: detections.mp4
     codec: mp4v              # 4-char FourCC, falls back to MJPG/.avi automatically
     fps: 0                   # 0 = match the source
-    hud: true                # small FPS badge in the top-left corner
+    hud: false               # enable with --show-fps for a top-left FPS badge
 
   # Annotated stills. `every` below skips STILLS only. The video above always
   # gets every processed frame; there is no frame-skip setting for it.
