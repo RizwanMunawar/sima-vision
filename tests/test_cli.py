@@ -88,6 +88,18 @@ def test_unset_flags_are_not_overrides():
     assert "decode.score_threshold" not in collect_overrides(args)
 
 
+@pytest.mark.parametrize("app", ["detect", "segment", "fall"])
+def test_fps_display_is_opt_in(app):
+    task = TASKS[app]()
+    overrides = collect_overrides(parse([app]))
+    assert "output.video.hud" not in overrides
+    assert task.load(None, overrides, use_file=False).video_hud is False
+    overrides = collect_overrides(parse([app, "--show-fps"]))
+    assert task.load(None, overrides, use_file=False).video_hud is True
+    overrides = collect_overrides(parse([app, "--no-hud"]))
+    assert overrides["output.video.hud"] is False
+
+
 def test_negative_switches_override_to_false():
     args = parse(["detect", "--no-save", "--no-video"])
     overrides = collect_overrides(args)

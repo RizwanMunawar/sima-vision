@@ -124,6 +124,7 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--save-dir DIR` | all | Where annotated stills are written. Implies `--save` |
 | `--save-every N` | all | Write every Nth still. Default `10` once stills are on; implies `--save`. `0` disables |
 | `--no-save` | all | Do not write stills. Already the default; use it to override a config file |
+| `--show-fps` | all | Show the FPS badge on the overlay (hidden by default) |
 | `--no-hud` | all | Leave the frame-rate badge off the overlay |
 | `--hud-scale N` | all | Frame-rate badge font size. Default `2.4`, which is 1.5x the caption scale; `0` follows the caption scale exactly |
 | `--hud-thickness N` | all | Badge stroke weight. Default `6`, which is 1.5x the caption thickness; `0` follows it exactly |

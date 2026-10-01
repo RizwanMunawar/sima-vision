@@ -589,7 +589,7 @@ class BaseConfig:
         video_codec: Four-character FourCC for the ``opencv`` encoder, with an
             MJPG fallback.
         video_fps: Output frame rate. 0 matches the source.
-        video_hud: Whether to draw the frame-rate badge.
+        video_hud: Whether to draw the frame-rate badge. Off by default.
         draw: Overlay appearance. See :class:`DrawConfig`.
         config_path: The file this came from, or None when it is all defaults.
             Reported by ``--validate`` and used to resolve relative asset paths.
@@ -645,7 +645,7 @@ class BaseConfig:
     video_bitrate_kbps: int = 12000
     video_codec: str = "mp4v"
     video_fps: int = 0
-    video_hud: bool = True
+    video_hud: bool = False
 
     draw: DrawConfig = DrawConfig()
 
@@ -769,7 +769,7 @@ def load_base_config(raw: dict, path: Path | None, defaults: TaskDefaults) -> Ba
         video_bitrate_kbps=_int(video, "bitrate_kbps", 12000),
         video_codec=_str(video, "codec", "mp4v"),
         video_fps=_int(video, "fps", 0),
-        video_hud=_bool(video, "hud", True),
+        video_hud=_bool(video, "hud", False),
         draw=load_draw_config(raw, defaults.draw),
         config_path=path,
     )
