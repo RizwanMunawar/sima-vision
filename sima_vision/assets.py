@@ -44,7 +44,7 @@ ASSETS_ENV = "SIMA_VISION_ASSETS"
 
 #: Clips and model packs alike, on one public GitHub release. Anything here is
 #: a plain GET: no login, no `sima-cli`, and the same code path for both kinds.
-SAMPLE_RELEASE = "https://github.com/RizwanMunawar/sima-vision/releases/download/26.0.1"
+SAMPLE_RELEASE = "https://github.com/RizwanMunawar/sima-vision/releases/download/26.0.4"
 
 #: Clips on the release, by name. Two of these were missing from this table for
 #: a while and naming either of them got you "source file not found" for a file
