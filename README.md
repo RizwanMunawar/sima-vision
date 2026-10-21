@@ -18,7 +18,7 @@
 </div>
 
 **Computer vision applications on the SiMa.ai Modalix DevKit 3.0.** Object detection,
-instance segmentation, fall detection and more: one pipeline, no setup step. Needs a
+instance segmentation, fall detection and retail analytics: one pipeline, no setup step. Needs a
 [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10
 or later.
 
@@ -59,8 +59,9 @@ them needs no login and no `sima-cli`.
 | `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4` |
 | `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4` |
 | `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4` |
+| `ret-analytics` | the detection pack + `shopping-trolley-items.mp4` | `retail.mp4` + `retail-report.json` |
 
-The annotated video is the only thing written. Stills are off unless you ask for them
+Each app writes annotated video; retail analytics also writes a JSON report. Stills are off unless you ask for them
 with `--save`.
 
 <details>
@@ -93,6 +94,48 @@ fall changes one thing, the class the box is labelled with, so a person reading 
 counted in the run summary.
 
 A confirmed fall re-arms only after sustained recovery.
+
+</details>
+
+<details>
+<summary>&nbsp;<b>Retail analytics</b> &nbsp;&middot;&nbsp; tracks checkout items and reports visual purchase candidates</summary>
+
+<br>
+
+Run `sima-vision ret-analytics` with the same workflow and shared flags as
+`detect`, `segment`, and `fall`:
+
+```bash
+sima-vision ret-analytics --validate
+sima-vision ret-analytics --source checkout.mp4 --classes bottle banana apple
+sima-vision ret-analytics --source rtsp://cam/live --checkout 0.2 0.3 0.8 0.9
+sima-vision ret-analytics --source checkout.mp4 --model products.tar.gz --labels products.txt --classes cereal milk --report purchases.json
+```
+
+The output is `retail.mp4` plus `retail-report.json`, with totals by product
+class. `--checkout X1 Y1 X2 Y2` selects a rectangle in normalized coordinates
+(0 to 1); the default is the whole frame. An item's center must remain inside
+for `--confirm-frames` consecutive observations (default 3). Each active track
+counts once. The JSON identifies these as visual purchase candidates: it does
+not confirm payment or identify shoppers. Occlusions, overlapping identical
+products, or items returning after track expiry can cause missed or duplicate counts.
+
+The default COCO model recognizes broad categories such as bottle, banana,
+apple, and orange. Use a compiled product model and matching `--labels` for
+store products or SKUs. The default retail clip is `shopping-trolley-items.mp4`,
+downloaded from the sample release and reframed to Annex-B on first use.
+
+Task settings also work in the existing `config.yaml` workflow; CLI flags win:
+
+```yaml
+retail:
+  classes: [bottle, banana, apple, orange]
+  checkout: [0.2, 0.3, 0.8, 0.9]
+  confirm_frames: 3
+  max_age: 30 # frames retained through missing detections
+  iou: 0.3
+  report: retail-report.json
+```
 
 </details>
 
@@ -283,40 +326,3 @@ and pass it on to someone else bringing up a DevKit.
 <a href="https://muhammadrizwanmunawar.medium.com/"><img src="assets/socials/medium.svg" width="50" alt="Medium"></a>
 
 </div>
-
-## Retail monitoring
-
-Run `sima-vision ret-analytics` with the same workflow and shared flags as
-`detect`, `segment`, and `fall`:
-
-```bash
-sima-vision ret-analytics --validate
-sima-vision ret-analytics --source checkout.mp4 --classes bottle banana apple
-sima-vision ret-analytics --source rtsp://cam/live --checkout 0.2 0.3 0.8 0.9
-sima-vision ret-analytics --source checkout.mp4 --model products.tar.gz --labels products.txt --classes cereal milk --report purchases.json
-```
-
-The output is `retail.mp4` plus `retail-report.json`, with totals by product
-class. `--checkout X1 Y1 X2 Y2` selects a rectangle in normalized coordinates
-(0 to 1); the default is the whole frame. An item's center must remain inside
-for `--confirm-frames` consecutive observations (default 3). Each active track
-counts once. The JSON identifies these as visual purchase candidates: it does
-not confirm payment or identify shoppers. Occlusions, overlapping identical
-products, or items returning after track expiry can cause missed or duplicate counts.
-
-The default COCO model recognizes broad categories such as bottle, banana,
-apple, and orange. Use a compiled product model and matching `--labels` for
-store products or SKUs. The default retail clip is `shopping-trolley-items.mp4`,
-downloaded from the sample release and reframed to Annex-B on first use.
-
-Task settings also work in the existing `config.yaml` workflow; CLI flags win:
-
-```yaml
-retail:
-  classes: [bottle, banana, apple, orange]
-  checkout: [0.2, 0.3, 0.8, 0.9]
-  confirm_frames: 3
-  max_age: 30 # frames retained through missing detections
-  iou: 0.3
-  report: retail-report.json
-```
