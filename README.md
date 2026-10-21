@@ -59,9 +59,9 @@ them needs no login and no `sima-cli`.
 | `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4` |
 | `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4` |
 | `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4` |
-| `ret-analytics` | the detection pack + `shopping-trolley-items.mp4` | `retail.mp4` + `retail-report.json` |
+| `ret-analytics` | the detection pack + `shopping-trolley-items.mp4` | `retail.mp4` |
 
-Each app writes annotated video; retail analytics also writes a JSON report. Stills are off unless you ask for them
+Each app writes annotated video. Stills are off unless you ask for them
 with `--save`.
 
 <details>
@@ -98,44 +98,25 @@ A confirmed fall re-arms only after sustained recovery.
 </details>
 
 <details>
-<summary>&nbsp;<b>Retail analytics</b> &nbsp;&middot;&nbsp; tracks checkout items and reports visual purchase candidates</summary>
+<summary>&nbsp;<b>Retail analytics</b> &nbsp;&middot;&nbsp; displays items in a shopping trolley</summary>
 
 <br>
 
-Run `sima-vision ret-analytics` with the same workflow and shared flags as
-`detect`, `segment`, and `fall`:
-
 ```bash
-sima-vision ret-analytics --validate
-sima-vision ret-analytics --source checkout.mp4 --classes bottle banana apple
-sima-vision ret-analytics --source rtsp://cam/live --checkout 0.2 0.3 0.8 0.9
-sima-vision ret-analytics --source checkout.mp4 --model products.tar.gz --labels products.txt --classes cereal milk --report purchases.json
+sima-vision ret-analytics
+sima-vision ret-analytics --source shopping-trolley-items.mp4
+sima-vision ret-analytics --classes bottle banana apple
 ```
 
-The output is `retail.mp4` plus `retail-report.json`, with totals by product
-class. `--checkout X1 Y1 X2 Y2` selects a rectangle in normalized coordinates
-(0 to 1); the default is the whole frame. An item's center must remain inside
-for `--confirm-frames` consecutive observations (default 3). Each active track
-counts once. The JSON identifies these as visual purchase candidates: it does
-not confirm payment or identify shoppers. Occlusions, overlapping identical
-products, or items returning after track expiry can cause missed or duplicate counts.
+Displays detected trolley items with boxes, names and confidence, and writes
+`retail.mp4`. Uses the same source, model and recording flags as `detect`.
+The default sample is `shopping-trolley-items.mp4`, fetched automatically.
+The default model recognizes COCO categories such as bottle, banana, apple,
+and orange. Product-specific recognition needs a trained model and matching labels.
+Point the camera at the trolley so the displayed detections represent its contents.
 
-The default COCO model recognizes broad categories such as bottle, banana,
-apple, and orange. Use a compiled product model and matching `--labels` for
-store products or SKUs. The default retail clip is `shopping-trolley-items.mp4`,
-downloaded from the sample release and reframed to Annex-B on first use.
-
-Task settings also work in the existing `config.yaml` workflow; CLI flags win:
-
-```yaml
-retail:
-  classes: [bottle, banana, apple, orange]
-  checkout: [0.2, 0.3, 0.8, 0.9]
-  confirm_frames: 3
-  max_age: 30 # frames retained through missing detections
-  iou: 0.3
-  report: retail-report.json
-```
+The optional `retail.classes` config setting selects item names or ids;
+an empty list displays all model classes.
 
 </details>
 
@@ -195,9 +176,6 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--no-masks` | `segment` | Blur around plain boxes instead. Needs no segment head |
 | `--minimal` | `segment` | Pull frames and do nothing else. Tells a slow app from a stalled graph |
 | `--classes CLASS...` | `fall`, `ret-analytics` | Fall classes (default `person`) or retail products (default `bottle banana apple orange`) |
-| `--checkout X1 Y1 X2 Y2` | `ret-analytics` | Normalized checkout rectangle. Default whole frame |
-| `--confirm-frames N` | `ret-analytics` | Consecutive checkout observations before counting. Default `3` |
-| `--report PATH` | `ret-analytics` | JSON purchase candidate report. Default `retail-report.json` |
 | `--confirm S` | `fall` | How long a fall signal must hold before it counts. Default `1.5` |
 | `--no-fall` | `fall` | Track without judging falls, which is how you tune tracking first |
 

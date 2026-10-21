@@ -193,8 +193,3 @@ output:
 
 retail:
   classes: [bottle, banana, apple, orange]
-  checkout: [0.0, 0.0, 1.0, 1.0]
-  confirm_frames: 3
-  max_age: 30
-  iou: 0.3
-  report: retail-report.json

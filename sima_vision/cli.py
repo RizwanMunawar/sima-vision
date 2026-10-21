@@ -72,7 +72,7 @@ examples:
   sima-vision detect  --source https://example.com/clip.h264
   sima-vision segment --blur --keep-classes person
   sima-vision fall    --source rtsp://cam/live
-  sima-vision ret-analytics --source checkout.mp4 --classes bottle apple
+  sima-vision ret-analytics --source shopping-trolley-items.mp4 --classes bottle apple
 
 without a board:
   sima-vision detect --validate            check the settings, no hardware at all
