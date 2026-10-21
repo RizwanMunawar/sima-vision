@@ -24,8 +24,23 @@ from .detect import DETECT_DRAW, DetectRuntime, DetectTask
 
 # Rough per-item US retail estimates, not a live price feed.
 # Produce reference: https://www.walmart.com/cp/fresh-produce/976793
-DEFAULT_PRICES = {"banana": 0.20, "tomato": 0.25, "apple": 1.00,
-                  "orange": 1.00, "bottle": 1.50, "carrot": 0.25}
+DEFAULT_PRICES = {
+    "cherry": 0.10,       # one cherry
+    "cantaloupe": 3.00,   # one melon
+    "banana": 0.20,
+    "cucumber": 0.75,
+    "bread": 2.00,        # one loaf
+    "snack": 1.50,        # one small packet
+    "orange": 1.00,
+    "avocados": 1.00,     # one avocado, even when the model label is plural
+    "avocado": 1.00,
+    "egg": 0.25,          # one egg
+    "milk": 4.00,         # one gallon container
+    "tomato": 0.25,
+    "apple": 1.00,
+    "bottle": 1.50,
+    "carrot": 0.25,
+}
 
 
 @dataclass(frozen=True)

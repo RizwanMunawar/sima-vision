@@ -22,6 +22,15 @@ instance segmentation, fall detection and retail analytics: one pipeline, no set
 [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10
 or later.
 
+<div align="center">
+
+| <img src="assets/apps/detect.gif" width="64" alt="Animated object detection icon"> | <img src="assets/apps/segment.gif" width="64" alt="Animated segmentation icon"> | <img src="assets/apps/fall.gif" width="64" alt="Animated fall detection icon"> | <img src="assets/apps/ret-analytics.gif" width="64" alt="Animated shopping trolley icon"> |
+|:--:|:--:|:--:|:--:|
+| **Object detection** | **Instance segmentation** | **Fall detection** | **Retail analytics** |
+| `detect` | `segment` | `fall` | `ret-analytics` |
+
+</div>
+
 - [Quickstart](#quickstart)
 - [Apps arguments](#apps-arguments)
 - [Your own model](#your-own-model)
@@ -125,6 +134,10 @@ an empty list displays all model classes.
 Prices are rough per-item US estimates, not live quotes. Produce estimates use
 [US retail listings](https://www.walmart.com/cp/fresh-produce/976793) as a reference.
 Unpriced classes show `price N/A` and are excluded from the known subtotal.
+Defaults include cherry ($0.10 each), cantaloupe ($3.00 each), banana ($0.20 each),
+cucumber ($0.75 each), bread ($2.00 per loaf), snack ($1.50 per small packet),
+orange ($1.00 each), avocados ($1.00 each), egg ($0.25 each), and milk
+($4.00 per gallon container). Both `avocado` and `avocados` labels are supported.
 Override estimates for your products in `config.yaml`:
 
 ```yaml
