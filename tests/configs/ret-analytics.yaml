@@ -1,0 +1,200 @@
+# SiMa Neat retail analytics
+#
+# Every setting below is the built-in default written out, so deleting a line
+# changes nothing. Paths are relative to the directory you launch from.
+# Windows paths (C:\ D:\) cannot work: the app runs on Linux.
+
+model:
+  # Where the compiled archive is. This is the default, and if it is not there
+  # yet the first run fetches it with `sima-cli` -- so you can delete the line.
+  # An https URL works too, and is downloaded into assets/models/ once.
+  path: assets/models/yolo26n-det-bf16-mla_tess-b1.tar.gz
+
+  # Class names, one per line. Unset uses the COCO list inside the package,
+  # which is what these models were compiled against.
+  # labels: my-classes.txt
+
+  # Detection head. Must match your model or you get no detections.
+  # yolo | yolov5 | yolov6 | yolov7 | yolov8 | yolov9 | yolov10 
+  # | yolo11 | yolo26 | yolox
+  # Add -seg or -pose for those variants. yolo11 maps to the YOLOv8 head.
+  family: yolo26
+
+  decode_type_option: auto            # head packing override, leave auto for SiMa model packs
+  num_classes: 0                      # 0 = read from the model archive
+
+source:
+  type: video                          # video | rtsp | usb
+
+  # A file, or an https URL to one, or empty for the sample clip below --
+  # which is on a public GitHub release and is fetched on the first run.
+  # Downloads land in assets/videos/. .h264 only for files, see the note below.
+  uri: assets/videos/shopping-trolley-items.mp4
+
+  # Leave these at 0. For .h264 the app reads the real geometry out of the
+  # stream's SPS, and the stream always wins over anything set here.
+  fps: 0
+  width: 0
+  height: 0
+
+  rtsp:
+    codec: h264                        # h264 | mjpeg
+    tcp: true
+    latency_ms: 100
+
+  usb:
+    camera_name: ""                    # "" = DevKit default camera
+    format: NV12
+
+# An .mp4 is reframed to a raw H.264 elementary stream on first use, because
+# the container path's decoder drops frames. To do it by hand, losslessly:
+#   ffmpeg -i clip.mp4 -c:v copy -bsf:v h264_mp4toannexb -f h264 clip.h264
+
+preprocess:
+  # What the app asks for. The route planner resolves it against the model
+  # archive and compiles the matching graph. `auto` means "planner decides".
+  kind: image                # image | tensor | auto
+  enable: on                 # on | off | auto
+
+  input_format: NV12         # what the source produces: NV12 for video/rtsp/usb, BGR for images
+  output_format: auto        # auto = take it from the model contract
+
+  input_max_width: 0         # 0 = use the probed source size
+  input_max_height: 0
+
+  resize:
+    enable: on
+    width: 0                 # 0 = infer from the model (640x640 for most YOLO)
+    height: 0
+    mode: letterbox          # letterbox (YOLO default) | stretch | crop
+    pad_value: 114
+    scaling_type: BILINEAR   # BILINEAR | NEAREST_NEIGHBOUR | BICUBIC | INTERAREA | NO_SCALING
+
+  normalize:
+    enable: on
+    preset: coco_yolo        # coco_yolo (all YOLO) | imagenet | none
+    mean: [0.0, 0.0, 0.0]    # only read when preset is none
+    stddev: [1.0, 1.0, 1.0]
+
+  # Leave both auto. The model pack's dtype contract decides whether these run
+  # in the preprocess graph or inside the MLA.
+  quantize:
+    enable: auto
+    zero_point: 0
+    scale: 0.0               # 0.0 = use the model's calibration
+  tessellate:
+    enable: auto
+    slice_shape: []          # empty = use the contract geometry
+
+decode:
+  score_threshold: 0.30      # minimum confidence, 0.0 keeps the packaged value
+  nms_iou: 0.60              # overlap threshold for non-max suppression
+  max_detections: 50         # top-K cap per frame
+
+runtime:
+  frames: 0                  # 0 = run until interrupted
+  pull_timeout_ms: 20000     # how long to wait for a frame before giving up
+  queue_depth: 4             # below 4 the graph drops frames under load
+
+  # Buffers each public output may hold. THE knob for "the run stops after N
+  # frames and then times out".
+  #
+  # Every buffer here is a frame checked out of the hardware decoder's pool, and
+  # that pool is small: the boot log prints `BufferNum=8` on this board. There
+  # are two public outputs, so this number is doubled, and the source appsink
+  # holds up to 4 more. At 4 that is 4*2 + 4 = 12 against a pool of 8, which
+  # only survives because a fast consumer drains it before both fill. A slower
+  # one (segmentation, a big model, JPEGs every frame) deadlocks the decoder:
+  # it cannot produce, so the app cannot consume, so nothing is ever released.
+  #
+  # Observed on a Modalix DevKit with the yolo26m-seg pack: 4 -> stalls at 8
+  # frames, 2 -> stalls at 25, 1 -> the lowest pressure this knob allows.
+  # Raise it only if a run completes and you want more headroom.
+  output_buffers: 1
+  # auto splits on source type, because a file and a camera want opposites:
+  #   file        -> reliable + block       every frame is kept, no deadline
+  #   rtsp / usb  -> realtime + keep_latest stay current, a camera cannot pause
+  # Forcing keep_latest on a file is what makes the recording short and fast:
+  # inference is slower than decoding, the surplus frames are discarded, and the
+  # survivors are still written at the source rate.
+  preset: auto               # auto | realtime | balanced | reliable
+  overflow_policy: auto      # auto | block | keep_latest | drop_incoming
+  profile: false             # per-stage timings
+  profile_interval: 100
+
+# How the overlay looks. Sizes are in pixels for a 1080p frame; with
+# auto_scale on they are multiplied by (frame height / reference_height), so 4K
+# does not get hairlines and 480p does not get slabs. Colours are [B, G, R]
+# because OpenCV is BGR, so [0, 0, 255] is red.
+visualization:
+  box_thickness: 3           # detection rectangle outline weight
+  text_scale: 1.0            # caption font size multiplier
+  text_thickness: 2          # caption stroke weight
+  text_padding: 10           # gap between caption text and the edge of its band
+
+  show_labels: on            # class name in the caption
+  show_scores: on            # confidence in the caption
+  score_decimals: 2          # 2 gives "person 0.57", 0 gives "person 1"
+
+  text_color: [255, 255, 255]   # caption text, white
+
+  auto_scale: on             # scale every size above with the frame height
+  reference_height: 1080     # the height those sizes are tuned for
+
+  # The FPS badge in the corner, drawn when output.video.hud is true.
+  # text_scale, text_thickness and padding follow the caption settings above
+  # when left at 0. Padding is what sets the badge size; the two minimums can
+  # only make it bigger, and the text stays centred either way.
+  hud:
+    text_color: [104, 31, 17]
+    bg_color: [255, 255, 255]
+    text_scale: 2.0          # 0 = follow text_scale above
+    text_thickness: 5        # 0 = follow text_thickness above
+
+    # Breathing room inside the badge, between the text and the badge edge.
+    # `padding` sets all four sides; padding_x / padding_y override the
+    # horizontal and vertical pair independently. 0 on either follows `padding`.
+    padding: 22              # 0 = follow text_padding above
+    padding_x: 34            # left and right gap
+    padding_y: 24            # top and bottom gap
+
+    # Gap between the badge and the top-left corner of the frame.
+    # 0 on either follows the matching padding.
+    margin_x: 28
+    margin_y: 24
+
+    fps_decimals: 0          # 0 gives "FPS: 25", 1 gives "FPS: 24.8"
+    min_width: 0             # 0 = fit the text
+    min_height: 0            # 0 = fit the text
+
+output:
+
+  # Annotated video written on the DevKit, one entry per processed frame.
+  # Survives the run, unlike the UDP feed.
+  video:
+    enable: true
+    path: retail.mp4
+    codec: mp4v              # 4-char FourCC, falls back to MJPG/.avi automatically
+    fps: 0                   # 0 = match the source
+    hud: false               # enable with --show-fps for a top-left FPS badge
+
+  # Annotated stills. `every` below skips STILLS only. The video above always
+  # gets every processed frame; there is no frame-skip setting for it.
+  save:
+    enable: true
+    dir: retail-frames
+    # Write every Nth frame, 0 disables. A 1080p JPEG per frame is real work on
+    # the board; 10 gives you plenty to look at and keeps the pipeline ahead of
+    # the decoder.
+    every: 10
+    overlay: true
+    format: jpg              # jpg | png
+
+
+retail:
+  classes: [bottle, banana, apple, orange]
+  checkout: [0.0, 0.0, 1.0, 1.0]
+  confirm_frames: 3
+  max_age: 30
+  iou: 0.3
+  report: retail-report.json

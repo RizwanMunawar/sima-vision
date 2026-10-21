@@ -98,7 +98,7 @@ A confirmed fall re-arms only after sustained recovery.
 
 ## Apps arguments
 
-Every flag, and which apps take it. All of them are for the three apps, which run on the
+Every flag, and which apps take it. All of them are for the four apps, which run on the
 DevKit. `sima-vision <app> --help` prints the same list.
 
 | Flag | Apps | What it does |
@@ -151,7 +151,10 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--mask-threshold T` | `segment` | Mask cut-off as a probability. Default `0.5`; lower grows instances |
 | `--no-masks` | `segment` | Blur around plain boxes instead. Needs no segment head |
 | `--minimal` | `segment` | Pull frames and do nothing else. Tells a slow app from a stalled graph |
-| `--classes CLASS...` | `fall` | Classes that can fall. Default `person` |
+| `--classes CLASS...` | `fall`, `ret-analytics` | Fall classes (default `person`) or retail products (default `bottle banana apple orange`) |
+| `--checkout X1 Y1 X2 Y2` | `ret-analytics` | Normalized checkout rectangle. Default whole frame |
+| `--confirm-frames N` | `ret-analytics` | Consecutive checkout observations before counting. Default `3` |
+| `--report PATH` | `ret-analytics` | JSON purchase candidate report. Default `retail-report.json` |
 | `--confirm S` | `fall` | How long a fall signal must hold before it counts. Default `1.5` |
 | `--no-fall` | `fall` | Track without judging falls, which is how you tune tracking first |
 
