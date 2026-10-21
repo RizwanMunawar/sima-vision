@@ -112,6 +112,16 @@ def draw_basket(annotated, rows):
         canvas[:, :image_w] = 24
         top = (height - scaled_h) // 2
         canvas[top:top + scaled_h, :image_w] = cv2.resize(annotated, (image_w, scaled_h))
+        title = "Smart Grocery Shopping"
+        title_scale = max(0.35, image_w / 900)
+        title_thickness = max(2, round(title_scale * 2))
+        (title_w, title_h), baseline = cv2.getTextSize(
+            title, runtime.FONT, title_scale, title_thickness,
+        )
+        if top >= title_h + baseline + 8:
+            cv2.putText(canvas, title, ((image_w - title_w) // 2,
+                        (top + title_h - baseline) // 2), runtime.FONT,
+                        title_scale, (255, 255, 255), title_thickness, cv2.LINE_AA)
     font = max(0.46, min(panel_w / 600, height / 600))
     margin = max(6, round(panel_w * 0.035))
     left, right = image_w + margin, width - margin
@@ -139,7 +149,7 @@ def draw_basket(annotated, rows):
     y = margin
     text("TROLLEY ITEMS", left, right, y, font * 1.15, True)
     y += row_h
-    text("Estimated prices (USD)", left, right, y, font * .85)
+    text("Estimated prices (USD)", left, right, y, font * .85, True)
     y += row_h
     table_top = y
     cv2.rectangle(canvas, (left, y), (right, y + row_h), (234, 240, 245), -1)
@@ -174,7 +184,7 @@ def draw_basket(annotated, rows):
     cv2.rectangle(canvas, (left, footer_top), (right, footer_top + row_h), (234, 240, 245), -1)
     text(f"{'Subtotal' if partial else 'Est. total'}: ${total:.2f}",
          left, right, footer_top, font * 1.05, True)
-    text("Confirmed items / estimates", left, right, footer_top + row_h, font * .8)
+    text("Confirmed items / estimates", left, right, footer_top + row_h, font * .8, True)
     return canvas
 
 
