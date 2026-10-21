@@ -166,6 +166,17 @@ def test_pull_runs_from_the_destination(tmp_path, calls):
     assert into.is_dir(), "the destination is created"
 
 
+def test_pull_includes_existing_retail_outputs(tmp_path, calls):
+    calls.listing["out"] = "retail.mp4\nretail-report.json\n"
+    assert devkit.run_pull([], HOST, tmp_path) == 0
+    ask, fetch = calls
+    assert "retail.mp4" in ask["command"][2]
+    assert "retail-report.json" in ask["command"][2]
+    assert fetch["command"] == [
+        "/usr/bin/scp", "-r", f"{HOST}:retail.mp4", f"{HOST}:retail-report.json", ".",
+    ]
+
+
 def test_pull_can_name_one_file(tmp_path, calls):
     calls.listing["out"] = "falls.mp4\n"
     assert devkit.run_pull(["falls.mp4"], HOST, tmp_path) == 0

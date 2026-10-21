@@ -18,9 +18,18 @@
 </div>
 
 **Computer vision applications on the SiMa.ai Modalix DevKit 3.0.** Object detection,
-instance segmentation, fall detection and more: one pipeline, no setup step. Needs a
+instance segmentation, fall detection and retail analytics: one pipeline, no setup step. Needs a
 [Modalix DevKit 3.0](https://devkit.sima.ai/products/development-kit-3-0) and Python 3.10
 or later.
+
+<div align="center">
+
+| <img src="assets/apps/detect.gif" width="64" alt="Animated object detection icon"> | <img src="assets/apps/segment.gif" width="64" alt="Animated segmentation icon"> | <img src="assets/apps/fall.gif" width="64" alt="Animated fall detection icon"> | <img src="assets/apps/ret-analytics.gif" width="64" alt="Animated shopping trolley icon"> |
+|:--:|:--:|:--:|:--:|
+| **Object detection** | **Instance segmentation** | **Fall detection** | **Retail analytics** |
+| `detect` | `segment` | `fall` | `ret-analytics` |
+
+</div>
 
 - [Quickstart](#quickstart)
 - [Apps arguments](#apps-arguments)
@@ -59,8 +68,9 @@ them needs no login and no `sima-cli`.
 | `detect` | `yolo26n-det-bf16-mla_tess-b1.tar.gz` (21 MB) + a 1080p demo clip (13 MB) | `detections.mp4` |
 | `segment` | `yolo26n-seg-bf16-mla_tess.tar.gz` (24 MB) + the same clip | `segmentation.mp4` |
 | `fall` | the detection pack again + a shorter clip (1.2 MB) | `falls.mp4` |
+| `ret-analytics` | the detection pack + `shopping-trolley-items.mp4` | `retail.mp4` |
 
-The annotated video is the only thing written. Stills are off unless you ask for them
+Each app writes annotated video. Stills are off unless you ask for them
 with `--save`.
 
 <details>
@@ -96,9 +106,66 @@ A confirmed fall re-arms only after sustained recovery.
 
 </details>
 
+<details>
+<summary>&nbsp;<b>Retail analytics</b> &nbsp;&middot;&nbsp; displays items in a shopping trolley</summary>
+
+<br>
+
+```bash
+sima-vision ret-analytics
+sima-vision ret-analytics --source shopping-trolley-items.mp4
+sima-vision ret-analytics --classes bottle banana apple
+```
+
+Displays detected trolley items with boxes, names and confidence, and writes
+`retail.mp4`. Uses the same source, model and recording flags as `detect`.
+The white side menu uses a table with Qty, Item, Unit $, and Total $ columns,
+larger text, alternating rows, and an estimated basket total.
+Each product row is bold and has its own consistent color.
+Products enter the menu after three consecutive detections and stay in first-added
+order. Quantities increase only after a higher simultaneous count is confirmed for
+three frames. Brief misses never remove rows or reduce counts, and repeated frames
+never add purchases. The menu retains confirmed items for the run; removals are not
+inferred, and new items hidden behind existing ones cannot be counted reliably.
+All model classes are displayed by default; `--classes` optionally filters them.
+The default sample is `shopping-trolley-items.mp4`, fetched automatically.
+The default model recognizes COCO categories such as bottle, banana, apple,
+and orange. Product-specific recognition needs a trained model and matching labels.
+Point the camera at the trolley so the displayed detections represent its contents.
+
+The optional `retail.classes` config setting selects item names or ids;
+an empty list displays all model classes.
+
+Prices are rough per-item US estimates, not live quotes. Produce estimates use
+[US retail listings](https://www.walmart.com/cp/fresh-produce/976793) as a reference.
+Unpriced classes show `price N/A` and are excluded from the known subtotal.
+Defaults include cherry ($0.10 each), cantaloupe ($3.00 each), banana ($0.20 each),
+cucumber ($0.75 each), bread ($2.00 per loaf), snack ($1.50 per small packet),
+orange ($1.00 each), avocados ($1.00 each), egg ($0.25 each), and milk
+($4.00 per gallon container). Both `avocado` and `avocados` labels are supported.
+Override estimates for your products in `config.yaml`:
+
+```yaml
+retail:
+  classes: []
+  prices:
+    banana: 0.20
+    tomato: 0.25
+    apple: 1.00
+```
+
+The COCO model does not have a tomato class; tomato detection requires a model
+trained for tomatoes and a matching labels file.
+
+If an automatically discovered `config.yaml` contains fall settings without a
+`retail` section, retail uses its own sample and output paths and prints a warning.
+CLI flags still win; an explicit `--config` uses the named file as written.
+
+</details>
+
 ## Apps arguments
 
-Every flag, and which apps take it. All of them are for the three apps, which run on the
+Every flag, and which apps take it. All of them are for the four apps, which run on the
 DevKit. `sima-vision <app> --help` prints the same list.
 
 | Flag | Apps | What it does |
@@ -151,7 +218,7 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--mask-threshold T` | `segment` | Mask cut-off as a probability. Default `0.5`; lower grows instances |
 | `--no-masks` | `segment` | Blur around plain boxes instead. Needs no segment head |
 | `--minimal` | `segment` | Pull frames and do nothing else. Tells a slow app from a stalled graph |
-| `--classes CLASS...` | `fall` | Classes that can fall. Default `person` |
+| `--classes CLASS...` | `fall`, `ret-analytics` | Fall classes (default `person`) or retail products (default all model classes) |
 | `--confirm S` | `fall` | How long a fall signal must hold before it counts. Default `1.5` |
 | `--no-fall` | `fall` | Track without judging falls, which is how you tune tracking first |
 
@@ -226,6 +293,9 @@ sima-vision pull                     # everything the run left
 sima-vision pull --into results/
 sima-vision push my-clip.h264
 ```
+
+The default pull includes `retail.mp4` and `retail-report.json` when present,
+along with the other apps' outputs. Missing files are skipped.
 
 ## Environment
 

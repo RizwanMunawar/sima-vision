@@ -44,7 +44,7 @@ ASSETS_ENV = "SIMA_VISION_ASSETS"
 
 #: Clips and model packs alike, on one public GitHub release. Anything here is
 #: a plain GET: no login, no `sima-cli`, and the same code path for both kinds.
-SAMPLE_RELEASE = "https://github.com/RizwanMunawar/sima-vision/releases/download/0.0.1"
+SAMPLE_RELEASE = "https://github.com/RizwanMunawar/sima-vision/releases/download/26.0.4"
 
 #: Clips on the release, by name. Two of these were missing from this table for
 #: a while and naming either of them got you "source file not found" for a file
@@ -55,6 +55,7 @@ SAMPLE_VIDEOS = {
     "people-walking-inside-mall.h264": "1920x1080 @ 30 fps, 1.2 MB. Quicker smoke test",
     "people-walking-in-street.mp4": "5.4 MB. Reframed to Annex-B on first use",
     "people-walking-small.mp4": "3.4 MB. The quickest thing here to try",
+    "shopping-trolley-items.mp4": "Retail sample. Reframed to Annex-B on first use",
 }
 
 #: Model packs on that same release, by size. Nano is the default: 20 MB
@@ -98,6 +99,11 @@ class TaskAssets:
 #: login and no ``sima-cli``. Each task fetches only its own: ``detect`` and
 #: ``fall`` share the detection pack, ``segment`` pulls the segmentation one.
 CATALOGUE: dict[str, TaskAssets] = {
+    "ret-analytics": TaskAssets(
+        "yolo26-detection",
+        "yolo26n-det-bf16-mla_tess-b1.tar.gz",
+        "shopping-trolley-items.mp4",
+    ),
     "detect": TaskAssets(
         "yolo26-detection",
         "yolo26n-det-bf16-mla_tess-b1.tar.gz",
