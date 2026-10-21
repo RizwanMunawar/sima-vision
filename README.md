@@ -121,6 +121,7 @@ Displays detected trolley items with boxes, names and confidence, and writes
 `retail.mp4`. Uses the same source, model and recording flags as `detect`.
 The white side menu uses a table with Qty, Item, Unit $, and Total $ columns,
 larger text, alternating rows, and an estimated basket total.
+Each product row is bold and has its own consistent color.
 Counts reflect each frame's visible items, so repeated frames do not add purchases.
 All model classes are displayed by default; `--classes` optionally filters them.
 The default sample is `shopping-trolley-items.mp4`, fetched automatically.

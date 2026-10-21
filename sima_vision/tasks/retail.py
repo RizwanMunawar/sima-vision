@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import colorsys
+import hashlib
 import math
 from collections import Counter
 from dataclasses import dataclass, field
@@ -56,6 +58,14 @@ def basket_rows(boxes, labels, prices):
     return [(name, count, prices.get(name.lower())) for name, count in sorted(counts.items())]
 
 
+def product_color(name):
+    """Stable, dark product ink that stays readable on the white table."""
+    digest = hashlib.sha256(name.strip().lower().encode("utf-8")).digest()
+    hue = int.from_bytes(digest[:4], "big") / 2**32
+    red, green, blue = colorsys.hsv_to_rgb(hue, 0.85, 0.52)
+    return tuple(round(channel * 255) for channel in (blue, green, red))
+
+
 def draw_basket(annotated, rows):
     """Draw a readable item table beside the full detection image."""
     cv2, np = runtime.cv2, runtime.np
@@ -76,20 +86,21 @@ def draw_basket(annotated, rows):
     ink, grid = (35, 42, 48), (215, 222, 229)
     edges = [left + round(table_w * f) for f in (0, .13, .51, .75, 1)]
 
-    def text(value, x1, x2, top, size=font, bold=False, align="left"):
+    def text(value, x1, x2, top, size=font, bold=False, align="left", color=ink):
         value = str(value)
+        thickness = max(2, round(size * 2)) if bold else 1
         padding = max(3, round(font * 7))
         available = max(1, x2 - x1 - 2 * padding)
         # Truncate long labels rather than shrinking the whole row's font.
         original = value
-        while value and cv2.getTextSize(value, runtime.FONT, size, 1)[0][0] > available:
+        while value and cv2.getTextSize(value, runtime.FONT, size, thickness)[0][0] > available:
             original = original[:-1]
             value = original + ".." if original else ""
-        (tw, th), baseline = cv2.getTextSize(value, runtime.FONT, size, 1)
+        (tw, th), baseline = cv2.getTextSize(value, runtime.FONT, size, thickness)
         x = x2 - padding - tw if align == "right" else x1 + padding
         y = top + (row_h + th - baseline) // 2
-        cv2.putText(canvas, value, (x, y), runtime.FONT, size, ink,
-                    max(1, round(size * 2)) if bold else 1, cv2.LINE_AA)
+        cv2.putText(canvas, value, (x, y), runtime.FONT, size, color,
+                    thickness, cv2.LINE_AA)
 
     y = margin
     text("TROLLEY ITEMS", left, right, y, font * 1.15, True)
@@ -105,12 +116,14 @@ def draw_basket(annotated, rows):
     capacity = max(0, (footer_top - y - row_h) // row_h)
     shown = rows[:capacity]
     for index, (name, quantity, price) in enumerate(shown):
+        color = product_color(name)
         if index % 2 == 0:
             cv2.rectangle(canvas, (left, y), (right, y + row_h), (248, 250, 252), -1)
         values = (quantity, name, "N/A" if price is None else f"{price:.2f}",
                   "N/A" if price is None else f"{quantity * price:.2f}")
         for i, value in enumerate(values):
-            text(value, edges[i], edges[i + 1], y, align="right" if i >= 2 else "left")
+            text(value, edges[i], edges[i + 1], y, bold=True, color=color,
+                 align="right" if i >= 2 else "left")
         cv2.line(canvas, (left, y + row_h), (right, y + row_h), grid, 1)
         y += row_h
     if not rows:
