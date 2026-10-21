@@ -3,8 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from ..config import BaseConfig, TaskDefaults, _section, _str_list
+from ..assets import default_source_uri
+from ..config import (
+    BaseConfig,
+    TaskDefaults,
+    _section,
+    _str_list,
+    discover_config,
+    read_config_file,
+)
+from ..console import console
 from ..samples import resolve_classes
 from ..sinks import load_labels
 from .detect import DETECT_DRAW, DetectRuntime, DetectTask
@@ -41,6 +51,30 @@ class RetailTask(DetectTask):
     config_class = RetailAppConfig
     defaults = TaskDefaults(task="ret-analytics", video_path="retail.mp4",
                             save_dir="retail-frames", draw=DETECT_DRAW)
+
+    def load(self, path, overrides, use_file=True):
+        resolved = discover_config(path) if use_file else None
+        if resolved is not None and path is None:
+            raw = read_config_file(resolved)
+            video = _section(_section(raw, "output"), "video")
+            fall_config = "fall" in raw or "tracking" in raw or Path(
+                str(video.get("path", ""))
+            ).name in {"fall.mp4", "falls.mp4"}
+            if fall_config and "retail" not in raw:
+                # An implicitly discovered fall config must not select the fall
+                # demo and output for a retail run. Explicit flags still win.
+                overrides = {
+                    "source.type": "video",
+                    "source.uri": default_source_uri(self.name),
+                    "output.video.path": self.defaults.video_path,
+                    "output.save.dir": self.defaults.save_dir,
+                    **overrides,
+                }
+                console.warn(
+                    f"{resolved} contains fall settings; using the retail sample and "
+                    "output paths. Use --config to explicitly reuse that file."
+                )
+        return super().load(resolved, overrides, use_file=use_file)
 
     def add_arguments(self, parser):
         parser.add_argument("--classes", dest="retail.classes", nargs="+",

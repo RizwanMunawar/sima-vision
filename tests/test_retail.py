@@ -44,3 +44,25 @@ def test_cli_validation(capsys):
 def test_checkout_options_are_removed(flag):
     with pytest.raises(SystemExit):
         build_parser().parse_args(["ret-analytics", flag])
+
+
+def test_discovered_fall_config_uses_retail_source_and_output(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "source:\n  uri: fall.h264\noutput:\n  video:\n    path: falls.mp4\n"
+        "fall:\n  confirm_seconds: 2\ndecode:\n  score_threshold: 0.5\n",
+        encoding="utf-8",
+    )
+    cfg = RetailTask().load(None, {})
+    assert cfg.source_uri.endswith("shopping-trolley-items.mp4")
+    assert cfg.video_path == "retail.mp4"
+    assert cfg.score_threshold == 0.5
+    overridden = RetailTask().load(None, {
+        "source.uri": "my-trolley.mp4", "output.video.path": "my-retail.mp4",
+    })
+    assert overridden.source_uri == "my-trolley.mp4"
+    assert overridden.video_path == "my-retail.mp4"
+    explicit = RetailTask().load(config, {})
+    assert explicit.source_uri == "fall.h264"
+    assert explicit.video_path == "falls.mp4"

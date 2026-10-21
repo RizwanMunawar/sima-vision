@@ -118,6 +118,10 @@ Point the camera at the trolley so the displayed detections represent its conten
 The optional `retail.classes` config setting selects item names or ids;
 an empty list displays all model classes.
 
+If an automatically discovered `config.yaml` contains fall settings without a
+`retail` section, retail uses its own sample and output paths and prints a warning.
+CLI flags still win; an explicit `--config` uses the named file as written.
+
 </details>
 
 ## Apps arguments
