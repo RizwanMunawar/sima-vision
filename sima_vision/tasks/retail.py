@@ -57,10 +57,10 @@ def basket_rows(boxes, labels, prices):
 
 
 def draw_basket(annotated, rows):
-    """Fit the complete annotated image beside a white menu at recorder size."""
+    """Draw a readable item table beside the full detection image."""
     cv2, np = runtime.cv2, runtime.np
     height, width = annotated.shape[:2]
-    panel_w = max(1, round(width * 0.34))
+    panel_w = max(1, round(width * 0.40))
     image_w = width - panel_w
     canvas = np.full_like(annotated, 255)
     scaled_h = max(1, round(height * image_w / width))
@@ -68,39 +68,66 @@ def draw_basket(annotated, rows):
         canvas[:, :image_w] = 24
         top = (height - scaled_h) // 2
         canvas[top:top + scaled_h, :image_w] = cv2.resize(annotated, (image_w, scaled_h))
-    scale = max(0.18, min(panel_w / 520, height / 800))
-    margin = max(2, round(20 * scale))
-    line_h = max(8, round(42 * scale))
-    x, y = image_w + margin, margin + line_h
+    font = max(0.46, min(panel_w / 600, height / 600))
+    margin = max(6, round(panel_w * 0.035))
+    left, right = image_w + margin, width - margin
+    table_w = max(1, right - left)
+    row_h = max(26, round(font * 55))
+    ink, grid = (35, 42, 48), (215, 222, 229)
+    edges = [left + round(table_w * f) for f in (0, .13, .51, .75, 1)]
 
-    def text(value, baseline, bold=False):
-        size = scale * (0.85 if bold else 0.70)
-        while cv2.getTextSize(value, runtime.FONT, size, 1)[0][0] > panel_w - 2 * margin:
-            size *= 0.9
-            if size < 0.05:
-                break
-        cv2.putText(canvas, value, (x, baseline), runtime.FONT, size,
-                    (25, 25, 25), max(1, round(2 * scale)) if bold else 1, cv2.LINE_AA)
+    def text(value, x1, x2, top, size=font, bold=False, align="left"):
+        value = str(value)
+        padding = max(3, round(font * 7))
+        available = max(1, x2 - x1 - 2 * padding)
+        # Truncate long labels rather than shrinking the whole row's font.
+        original = value
+        while value and cv2.getTextSize(value, runtime.FONT, size, 1)[0][0] > available:
+            original = original[:-1]
+            value = original + ".." if original else ""
+        (tw, th), baseline = cv2.getTextSize(value, runtime.FONT, size, 1)
+        x = x2 - padding - tw if align == "right" else x1 + padding
+        y = top + (row_h + th - baseline) // 2
+        cv2.putText(canvas, value, (x, y), runtime.FONT, size, ink,
+                    max(1, round(size * 2)) if bold else 1, cv2.LINE_AA)
 
-    text("TROLLEY ITEMS", y, True)
-    y += line_h
-    text("Estimated USD / item", y)
-    y += line_h
-    capacity = max(0, (height - y - 3 * line_h) // line_h)
+    y = margin
+    text("TROLLEY ITEMS", left, right, y, font * 1.15, True)
+    y += row_h
+    text("Estimated prices (USD)", left, right, y, font * .85)
+    y += row_h
+    table_top = y
+    cv2.rectangle(canvas, (left, y), (right, y + row_h), (234, 240, 245), -1)
+    for i, label in enumerate(("Qty", "Item", "Unit $", "Total $")):
+        text(label, edges[i], edges[i + 1], y, font * .86, True)
+    y += row_h
+    footer_top = height - margin - 2 * row_h
+    capacity = max(0, (footer_top - y - row_h) // row_h)
     shown = rows[:capacity]
+    for index, (name, quantity, price) in enumerate(shown):
+        if index % 2 == 0:
+            cv2.rectangle(canvas, (left, y), (right, y + row_h), (248, 250, 252), -1)
+        values = (quantity, name, "N/A" if price is None else f"{price:.2f}",
+                  "N/A" if price is None else f"{quantity * price:.2f}")
+        for i, value in enumerate(values):
+            text(value, edges[i], edges[i + 1], y, align="right" if i >= 2 else "left")
+        cv2.line(canvas, (left, y + row_h), (right, y + row_h), grid, 1)
+        y += row_h
     if not rows:
-        text("No items detected", y)
-    for name, quantity, price in shown:
-        amount = "price N/A" if price is None else f"${price:.2f} ea  ${quantity * price:.2f}"
-        text(f"{quantity} x {name}  {amount}", y)
-        y += line_h
+        text("No items detected", left, right, y)
+        y += row_h
+    for x in edges:
+        cv2.line(canvas, (x, table_top), (x, y), grid, 1)
+    cv2.line(canvas, (left, table_top), (right, table_top), grid, 1)
+    cv2.line(canvas, (left, table_top + row_h), (right, table_top + row_h), grid, 1)
     if len(rows) > len(shown):
-        text(f"+ {len(rows) - len(shown)} more item types", y)
+        text(f"+ {len(rows) - len(shown)} more item types", left, right, y, font * .85)
     total = sum(quantity * price for _, quantity, price in rows if price is not None)
     partial = any(price is None for _, _, price in rows)
-    text(f"{'Known subtotal' if partial else 'Est. total'}: ${total:.2f}",
-         height - 2 * line_h, True)
-    text("Visible items / estimated prices", height - line_h)
+    cv2.rectangle(canvas, (left, footer_top), (right, footer_top + row_h), (234, 240, 245), -1)
+    text(f"{'Subtotal' if partial else 'Est. total'}: ${total:.2f}",
+         left, right, footer_top, font * 1.05, True)
+    text("Visible items / estimates", left, right, footer_top + row_h, font * .8)
     return canvas
 
 
