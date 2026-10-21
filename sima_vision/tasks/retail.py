@@ -55,7 +55,41 @@ def basket_rows(boxes, labels, prices):
     """Current visible quantities, never accumulated once per video frame."""
     counts = Counter(labels[b["class_id"]] if 0 <= b["class_id"] < len(labels)
                      else f"class {b['class_id']}" for b in boxes)
-    return [(name, count, prices.get(name.lower())) for name, count in sorted(counts.items())]
+    return [(name, count, prices.get(name.lower())) for name, count in counts.items()]
+
+
+class BasketMenu:
+    """Append confirmed products once and hold counts through detection misses.
+
+    Quantities are confirmed simultaneous counts, not sums across video frames.
+    The menu holds its basket until the run ends; it does not infer removals.
+    """
+
+    def __init__(self, confirm_frames=3):
+        self.confirm_frames = confirm_frames
+        self.items = {}
+        self.pending = {}
+
+    def update(self, rows):
+        observed = {name: (quantity, price) for name, quantity, price in rows}
+        for name in list(self.pending):
+            if name not in observed:
+                del self.pending[name]
+        for name, (quantity, price) in observed.items():
+            previous = self.items.get(name, (0, price))[0]
+            if quantity <= previous:
+                self.pending.pop(name, None)
+                continue
+            target, hits = self.pending.get(name, (quantity, 0))
+            hits = hits + 1 if quantity == target else 1
+            self.pending[name] = (quantity, hits)
+        # Pending insertion order preserves first appearance even when the
+        # detector returns the boxes in a different order on the next frame.
+        for name, (quantity, hits) in list(self.pending.items()):
+            if hits >= self.confirm_frames:
+                self.items[name] = (quantity, observed[name][1])
+                del self.pending[name]
+        return [(name, quantity, price) for name, (quantity, price) in self.items.items()]
 
 
 def product_color(name):
@@ -140,7 +174,7 @@ def draw_basket(annotated, rows):
     cv2.rectangle(canvas, (left, footer_top), (right, footer_top + row_h), (234, 240, 245), -1)
     text(f"{'Subtotal' if partial else 'Est. total'}: ${total:.2f}",
          left, right, footer_top, font * 1.05, True)
-    text("Visible items / estimates", left, right, footer_top + row_h, font * .8)
+    text("Confirmed items / estimates", left, right, footer_top + row_h, font * .8)
     return canvas
 
 
@@ -153,6 +187,7 @@ class RetailRuntime(DetectRuntime):
     unit = "items"
 
     def __init__(self, cfg, pipeline):
+        self.menu = BasketMenu()
         self.classes = resolve_classes(
             cfg.retail.classes, pipeline.labels, "retail.classes", cfg.labels_path,
         )
@@ -165,7 +200,7 @@ class RetailRuntime(DetectRuntime):
 
     def render(self, cfg, pipeline, frame, results, fps):
         annotated = super().render(cfg, pipeline, frame, results, fps)
-        rows = basket_rows(results, pipeline.labels, cfg.retail.prices)
+        rows = self.menu.update(basket_rows(results, pipeline.labels, cfg.retail.prices))
         return draw_basket(annotated, rows)
 
 

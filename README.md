@@ -122,7 +122,11 @@ Displays detected trolley items with boxes, names and confidence, and writes
 The white side menu uses a table with Qty, Item, Unit $, and Total $ columns,
 larger text, alternating rows, and an estimated basket total.
 Each product row is bold and has its own consistent color.
-Counts reflect each frame's visible items, so repeated frames do not add purchases.
+Products enter the menu after three consecutive detections and stay in first-added
+order. Quantities increase only after a higher simultaneous count is confirmed for
+three frames. Brief misses never remove rows or reduce counts, and repeated frames
+never add purchases. The menu retains confirmed items for the run; removals are not
+inferred, and new items hidden behind existing ones cannot be counted reliably.
 All model classes are displayed by default; `--classes` optionally filters them.
 The default sample is `shopping-trolley-items.mp4`, fetched automatically.
 The default model recognizes COCO categories such as bottle, banana, apple,

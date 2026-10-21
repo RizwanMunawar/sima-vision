@@ -5,7 +5,7 @@ import pytest
 from sima_vision.cli import build_parser, main
 from sima_vision.sinks import load_labels
 from sima_vision.tasks.detect import DetectRuntime
-from sima_vision.tasks.retail import RetailRuntime, RetailTask, basket_rows, draw_basket
+from sima_vision.tasks.retail import BasketMenu, RetailRuntime, RetailTask, basket_rows, draw_basket
 
 
 def test_only_selected_items_are_displayed(monkeypatch):
@@ -90,7 +90,9 @@ def test_retail_renders_real_boxes_and_white_menu():
     pipeline = SimpleNamespace(labels=labels)
     boxes = [dict(class_id=0, x1=100, y1=200, x2=300, y2=400, score=0.9)]
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-    annotated = RetailRuntime(cfg, pipeline).render(cfg, pipeline, frame, boxes, 25)
+    rt = RetailRuntime(cfg, pipeline)
+    for _ in range(3):
+        annotated = rt.render(cfg, pipeline, frame, boxes, 25)
     assert annotated.shape == frame.shape  # both hardware and OpenCV writers need this
     assert np.count_nonzero(annotated[200:400, :600]) > 0  # visible box in image area
     assert np.all(annotated[0, -1] == 255)
@@ -103,3 +105,30 @@ def test_retail_renders_real_boxes_and_white_menu():
 def test_invalid_price_is_rejected(price):
     with pytest.raises(ValueError, match="retail.prices"):
         RetailTask().load(None, {"retail.prices": {"tomato": price}}, use_file=False)
+
+
+def test_menu_keeps_insertion_order_and_counts_through_misses():
+    menu = BasketMenu()
+    banana, apple = ("banana", 1, .2), ("apple", 1, 1.)
+    for _ in range(3):
+        rows = menu.update([banana])
+    assert rows == [banana]
+    for _ in range(3):
+        rows = menu.update([apple, banana])
+    assert rows == [banana, apple]  # no alphabetical reshuffling
+    assert menu.update([]) == rows
+    assert menu.update([apple]) == rows
+    assert menu.update([("banana", 2, .2), apple]) == rows  # one-frame spike
+    assert menu.update([banana, apple]) == rows
+    for _ in range(3):
+        rows = menu.update([apple, ("banana", 2, .2)])
+    assert rows == [("banana", 2, .2), apple]
+    for _ in range(10):
+        assert menu.update([banana]) == rows  # no count flicker or repeat increments
+
+
+def test_menu_drops_unconfirmed_new_items():
+    menu = BasketMenu()
+    assert menu.update([("banana", 1, .2)]) == []
+    assert menu.update([]) == []
+    assert not menu.pending
