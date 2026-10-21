@@ -113,7 +113,7 @@ def draw_basket(annotated, rows):
         top = (height - scaled_h) // 2
         canvas[top:top + scaled_h, :image_w] = cv2.resize(annotated, (image_w, scaled_h))
         title = "Smart Grocery Shopping"
-        title_scale = max(0.35, image_w / 900)
+        title_scale = max(0.44, image_w / 720)
         title_thickness = max(2, round(title_scale * 2))
         (title_w, title_h), baseline = cv2.getTextSize(
             title, runtime.FONT, title_scale, title_thickness,
