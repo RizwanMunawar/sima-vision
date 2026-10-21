@@ -255,6 +255,9 @@ sima-vision pull --into results/
 sima-vision push my-clip.h264
 ```
 
+The default pull includes `retail.mp4` and `retail-report.json` when present,
+along with the other apps' outputs. Missing files are skipped.
+
 ## Environment
 
 | Variable | What it does |

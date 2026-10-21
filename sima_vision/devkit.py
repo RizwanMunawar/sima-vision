@@ -36,12 +36,14 @@ from .console import console, human_bytes
 #: Saves retyping `--host` on every command.
 DEVKIT_ENV = "SIMA_VISION_DEVKIT"
 
-#: What a run leaves in its working directory, across all three tasks. `pull`
+#: What a run leaves in its working directory, across all tasks. `pull`
 #: with no arguments asks for these and takes whatever is actually there, so it
 #: does not need to be told which task ran.
 OUTPUTS = (
     "detections.mp4", "segmentation.mp4", "falls.mp4",
+    "retail.mp4", "retail-report.json",
     "detections.avi", "segmentation.avi", "falls.avi",
+    "retail.avi", "retail-frames",
     "frames", "config.yaml",
 )
 

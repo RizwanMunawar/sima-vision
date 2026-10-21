@@ -447,7 +447,7 @@ def add_pull_parser(subparsers) -> None:
         description=(
             "Copy a run's output back to this machine. With no names it asks "
             "for everything any task could have written -- the annotated video, "
-            "frames/ and config.yaml -- and takes whatever is there, "
+            "frames/, retail-report.json and config.yaml -- and takes whatever is there, "
             "so it does not need to be told which task ran."
         ),
         epilog=(
