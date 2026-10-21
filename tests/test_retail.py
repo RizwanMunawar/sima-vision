@@ -5,7 +5,7 @@ import pytest
 from sima_vision.cli import build_parser, main
 from sima_vision.sinks import load_labels
 from sima_vision.tasks.detect import DetectRuntime
-from sima_vision.tasks.retail import RetailRuntime, RetailTask
+from sima_vision.tasks.retail import RetailRuntime, RetailTask, basket_rows, draw_basket
 
 
 def test_only_selected_items_are_displayed(monkeypatch):
@@ -66,3 +66,40 @@ def test_discovered_fall_config_uses_retail_source_and_output(tmp_path, monkeypa
     explicit = RetailTask().load(config, {})
     assert explicit.source_uri == "fall.h264"
     assert explicit.video_path == "falls.mp4"
+
+
+def test_default_keeps_all_detections_and_visible_counts(monkeypatch):
+    cfg = RetailTask().load(None, {}, use_file=False)
+    labels = ["banana", "tomato", "unknown product"]
+    boxes = [{"class_id": 0}, {"class_id": 1}, {"class_id": 1}, {"class_id": 2}]
+    pipeline = SimpleNamespace(labels=labels)
+    monkeypatch.setattr(DetectRuntime, "decode", lambda *args: (None, boxes, 0.0))
+    rt = RetailRuntime(cfg, pipeline)
+    assert rt.decode(pipeline, cfg, None, 1)[1] == boxes
+    assert basket_rows(boxes, labels, cfg.retail.prices) == [
+        ("banana", 1, 0.20), ("tomato", 2, 0.25), ("unknown product", 1, None),
+    ]
+    assert basket_rows([], labels, cfg.retail.prices) == []
+
+
+def test_retail_renders_real_boxes_and_white_menu():
+    import numpy as np
+
+    cfg = RetailTask().load(None, {}, use_file=False)
+    labels = ["banana", "tomato"]
+    pipeline = SimpleNamespace(labels=labels)
+    boxes = [dict(class_id=0, x1=100, y1=200, x2=300, y2=400, score=0.9)]
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    annotated = RetailRuntime(cfg, pipeline).render(cfg, pipeline, frame, boxes, 25)
+    assert annotated.shape == frame.shape  # both hardware and OpenCV writers need this
+    assert np.count_nonzero(annotated[200:400, :600]) > 0  # visible box in image area
+    assert np.all(annotated[0, -1] == 255)
+    assert np.any(annotated[20:200, 900:] < 100)  # menu text
+    assert not np.any(frame)  # input remains untouched
+    assert draw_basket(frame, []).shape == frame.shape
+
+
+@pytest.mark.parametrize("price", [-1, float("nan"), True, "free"])
+def test_invalid_price_is_rejected(price):
+    with pytest.raises(ValueError, match="retail.prices"):
+        RetailTask().load(None, {"retail.prices": {"tomato": price}}, use_file=False)

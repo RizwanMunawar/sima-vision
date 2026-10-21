@@ -192,4 +192,5 @@ output:
 
 
 retail:
-  classes: [bottle, banana, apple, orange]
+  classes: []
+  prices: {banana: 0.20, tomato: 0.25, apple: 1.00, orange: 1.00}

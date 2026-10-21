@@ -110,6 +110,10 @@ sima-vision ret-analytics --classes bottle banana apple
 
 Displays detected trolley items with boxes, names and confidence, and writes
 `retail.mp4`. Uses the same source, model and recording flags as `detect`.
+The white side menu lists visible quantities (`1 x banana`, `2 x tomato`),
+estimated unit prices in USD, line totals and an estimated basket total.
+Counts reflect each frame's visible items, so repeated frames do not add purchases.
+All model classes are displayed by default; `--classes` optionally filters them.
 The default sample is `shopping-trolley-items.mp4`, fetched automatically.
 The default model recognizes COCO categories such as bottle, banana, apple,
 and orange. Product-specific recognition needs a trained model and matching labels.
@@ -117,6 +121,23 @@ Point the camera at the trolley so the displayed detections represent its conten
 
 The optional `retail.classes` config setting selects item names or ids;
 an empty list displays all model classes.
+
+Prices are rough per-item US estimates, not live quotes. Produce estimates use
+[US retail listings](https://www.walmart.com/cp/fresh-produce/976793) as a reference.
+Unpriced classes show `price N/A` and are excluded from the known subtotal.
+Override estimates for your products in `config.yaml`:
+
+```yaml
+retail:
+  classes: []
+  prices:
+    banana: 0.20
+    tomato: 0.25
+    apple: 1.00
+```
+
+The COCO model does not have a tomato class; tomato detection requires a model
+trained for tomatoes and a matching labels file.
 
 If an automatically discovered `config.yaml` contains fall settings without a
 `retail` section, retail uses its own sample and output paths and prints a warning.
@@ -179,7 +200,7 @@ DevKit. `sima-vision <app> --help` prints the same list.
 | `--mask-threshold T` | `segment` | Mask cut-off as a probability. Default `0.5`; lower grows instances |
 | `--no-masks` | `segment` | Blur around plain boxes instead. Needs no segment head |
 | `--minimal` | `segment` | Pull frames and do nothing else. Tells a slow app from a stalled graph |
-| `--classes CLASS...` | `fall`, `ret-analytics` | Fall classes (default `person`) or retail products (default `bottle banana apple orange`) |
+| `--classes CLASS...` | `fall`, `ret-analytics` | Fall classes (default `person`) or retail products (default all model classes) |
 | `--confirm S` | `fall` | How long a fall signal must hold before it counts. Default `1.5` |
 | `--no-fall` | `fall` | Track without judging falls, which is how you tune tracking first |
 
