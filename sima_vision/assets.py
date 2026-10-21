@@ -55,6 +55,7 @@ SAMPLE_VIDEOS = {
     "people-walking-inside-mall.h264": "1920x1080 @ 30 fps, 1.2 MB. Quicker smoke test",
     "people-walking-in-street.mp4": "5.4 MB. Reframed to Annex-B on first use",
     "people-walking-small.mp4": "3.4 MB. The quickest thing here to try",
+    "shopping-trolley-items.mp4": "Retail sample. Reframed to Annex-B on first use",
 }
 
 #: Model packs on that same release, by size. Nano is the default: 20 MB
@@ -101,7 +102,7 @@ CATALOGUE: dict[str, TaskAssets] = {
     "ret-analytics": TaskAssets(
         "yolo26-detection",
         "yolo26n-det-bf16-mla_tess-b1.tar.gz",
-        "people-walking-inside-mall.h264",
+        "shopping-trolley-items.mp4",
     ),
     "detect": TaskAssets(
         "yolo26-detection",

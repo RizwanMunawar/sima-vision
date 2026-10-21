@@ -303,8 +303,8 @@ products, or items returning after track expiry can cause missed or duplicate co
 
 The default COCO model recognizes broad categories such as bottle, banana,
 apple, and orange. Use a compiled product model and matching `--labels` for
-store products or SKUs. The default mall clip is a pipeline smoke test and
-may contain no supported products. Use checkout footage for useful counts.
+store products or SKUs. The default retail clip is `shopping-trolley-items.mp4`,
+downloaded from the sample release and reframed to Annex-B on first use.
 
 Task settings also work in the existing `config.yaml` workflow; CLI flags win:
 
