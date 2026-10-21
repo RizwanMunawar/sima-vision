@@ -29,13 +29,14 @@ from ..console import console
 from .base import Task
 from .detect import DetectTask
 from .fall import FallTask
+from .retail import RetailTask
 from .segment import SegmentTask
 
 #: Where a separate distribution advertises the tasks it adds.
 ENTRY_POINT_GROUP = "sima_vision.tasks"
 
 #: The applications that ship with this package, in ``--help`` order.
-BUILTIN: tuple[type[Task], ...] = (DetectTask, SegmentTask, FallTask)
+BUILTIN: tuple[type[Task], ...] = (DetectTask, SegmentTask, FallTask, RetailTask)
 
 
 def load_plugins(taken: set[str]) -> dict[str, type[Task]]:
@@ -90,6 +91,7 @@ __all__ = [
     "TASKS",
     "DetectTask",
     "FallTask",
+    "RetailTask",
     "SegmentTask",
     "Task",
     "build_registry",

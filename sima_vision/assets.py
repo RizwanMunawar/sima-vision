@@ -98,6 +98,11 @@ class TaskAssets:
 #: login and no ``sima-cli``. Each task fetches only its own: ``detect`` and
 #: ``fall`` share the detection pack, ``segment`` pulls the segmentation one.
 CATALOGUE: dict[str, TaskAssets] = {
+    "ret-analytics": TaskAssets(
+        "yolo26-detection",
+        "yolo26n-det-bf16-mla_tess-b1.tar.gz",
+        "people-walking-inside-mall.h264",
+    ),
     "detect": TaskAssets(
         "yolo26-detection",
         "yolo26n-det-bf16-mla_tess-b1.tar.gz",
