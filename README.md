@@ -139,19 +139,20 @@ an empty list displays all model classes.
 Prices are rough per-item US estimates, not live quotes. Produce estimates use
 [US retail listings](https://www.walmart.com/cp/fresh-produce/976793) as a reference.
 Unpriced classes show `price N/A` and are excluded from the known subtotal.
-Defaults include cherry ($0.10 each), cantaloupe ($3.00 each), banana ($0.20 each),
-cucumber ($0.75 each), bread ($2.00 per loaf), snack ($1.50 per small packet),
-orange ($1.00 each), avocados ($1.00 each), egg ($0.25 each), and milk
-($4.00 per gallon container). Both `avocado` and `avocados` labels are supported.
+Defaults include cherry ($0.30 each), cantaloupe ($9.00 each), banana ($0.60 each),
+cucumber ($2.25 each), bread ($6.00 per loaf), snack ($4.50 per small packet),
+orange ($3.00 each), avocados ($3.00 each), egg ($0.75 each), and milk
+($12.00 per gallon container). Package-bag is $1.25, cracker is $5.00, and
+crisp is $3.50. Both `avocado` and `avocados` labels are supported.
 Override estimates for your products in `config.yaml`:
 
 ```yaml
 retail:
   classes: []
   prices:
-    banana: 0.20
-    tomato: 0.25
-    apple: 1.00
+    banana: 0.60
+    tomato: 0.75
+    apple: 3.00
 ```
 
 The COCO model does not have a tomato class; tomato detection requires a model

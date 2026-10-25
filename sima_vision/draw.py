@@ -7,6 +7,8 @@ still looks right at 4K.
 
 from __future__ import annotations
 
+import colorsys
+
 from . import runtime
 
 # The class palette, BGR because that is what OpenCV expects. Written as hex
@@ -42,15 +44,23 @@ _ink_cache: dict[tuple[str, int, int], tuple[int, int]] = {}
 
 
 def class_color(class_id: int) -> tuple[int, int, int]:
-    """Pick a stable colour for a class.
+    """Pick a stable, distinct colour for a class.
 
     Args:
         class_id: Model class id.
 
     Returns:
-        A BGR tuple, repeating every :data:`CLASS_COLORS` entries.
+        A BGR tuple. The first palette colours stay fixed; later class ids get
+        deterministic hues instead of reusing another class's colour.
     """
-    return CLASS_COLORS[class_id % len(CLASS_COLORS)]
+    if class_id < len(CLASS_COLORS):
+        return CLASS_COLORS[class_id]
+
+    # Spread higher class ids around the hue wheel with the golden angle. The
+    # fixed saturation and value keep generated colours vivid and consistent.
+    hue = ((class_id - len(CLASS_COLORS)) * 0.618033988749895) % 1.0
+    red, green, blue = colorsys.hsv_to_rgb(hue, 0.78, 0.92)
+    return tuple(round(channel * 255) for channel in (blue, green, red))
 
 
 def relative_luminance(bgr: tuple[int, int, int]) -> float:
