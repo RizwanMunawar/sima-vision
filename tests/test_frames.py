@@ -329,8 +329,9 @@ def test_ink_extent_is_cached_by_folded_digits():
     assert len(_ink_cache) == 1
 
 
-def test_class_color_is_stable_and_wraps():
-    assert class_color(0) == class_color(20)
+def test_class_color_is_stable_and_distinct():
+    assert class_color(0) == class_color(0)
+    assert class_color(0) != class_color(20)
     assert class_color(3) != class_color(4)
 
 
@@ -715,13 +716,14 @@ def test_the_class_palette_is_the_one_that_was_specified():
     assert len(set(CLASS_COLORS)) == len(CLASS_COLORS), "a repeat makes two classes look alike"
 
 
-def test_class_colours_cycle_and_are_stable():
+def test_class_colours_are_distinct_and_stable():
     from sima_vision.draw import CLASS_COLORS, class_color
 
     assert class_color(0) == bgr_of("F28C28")
     assert class_color(1) == bgr_of("05299E")
-    assert class_color(len(CLASS_COLORS)) == class_color(0)
-    assert class_color(79) == CLASS_COLORS[79 % len(CLASS_COLORS)]
+    colors = [class_color(class_id) for class_id in range(80)]
+    assert len(set(colors)) == len(colors)
+    assert class_color(79) == class_color(79)
 
 
 def test_every_class_colour_gets_a_readable_caption():

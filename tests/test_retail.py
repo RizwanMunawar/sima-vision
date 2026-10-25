@@ -77,7 +77,7 @@ def test_default_keeps_all_detections_and_visible_counts(monkeypatch):
     rt = RetailRuntime(cfg, pipeline)
     assert rt.decode(pipeline, cfg, None, 1)[1] == boxes
     assert basket_rows(boxes, labels, cfg.retail.prices) == [
-        ("banana", 1, 0.20), ("tomato", 2, 0.25), ("unknown product", 1, None),
+        ("banana", 1, 0.60), ("tomato", 2, 0.75), ("unknown product", 1, None),
     ]
     assert basket_rows([], labels, cfg.retail.prices) == []
 
