@@ -717,7 +717,7 @@ def test_the_class_palette_is_the_one_that_was_specified():
 
 
 def test_class_colours_are_distinct_and_stable():
-    from sima_vision.draw import CLASS_COLORS, class_color
+    from sima_vision.draw import class_color
 
     assert class_color(0) == bgr_of("F28C28")
     assert class_color(1) == bgr_of("05299E")
