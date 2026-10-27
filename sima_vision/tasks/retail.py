@@ -43,7 +43,7 @@ DEFAULT_PRICES = {
     "bottle": 4.50,
     "carrot": 0.75,
     "package-bag": 1.25,
-    "cracker": 5.00,
+    "peaches": 5.00,
     "crisp": 3.50,
 }
 
