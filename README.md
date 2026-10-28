@@ -142,7 +142,7 @@ Unpriced classes show `price N/A` and are excluded from the known subtotal.
 Defaults include cherry ($0.30 each), cantaloupe ($9.00 each), banana ($0.60 each),
 cucumber ($2.25 each), bread ($6.00 per loaf), snack ($4.50 per small packet),
 orange ($3.00 each), avocados ($3.00 each), egg ($0.75 each), and milk
-($12.00 per gallon container). Package-bag is $1.25, cracker is $5.00, and
+($12.00 per gallon container). Package-bag is $1.25, peaches are $5.00, and
 crisp is $3.50. Both `avocado` and `avocados` labels are supported.
 Override estimates for your products in `config.yaml`:
 
